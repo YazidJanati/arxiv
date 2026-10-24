@@ -8,7 +8,7 @@ A minimal macOS reader for daily arXiv papers, styled after [text](https://githu
 - Click the week label above the days to choose **This week** or **Previous week**. Each launch starts on the current week.
 - Read paper titles and authors. Click a title to expand or collapse its abstract.
 - Use the bookmark beside a paper to save it. **Bookmarks** collects saved papers across days and sections.
-- Search the current section or your bookmarks by title and author name. Search ignores case and accents.
+- Search all subscribed sections across both retained weeks by title and author name, from any view. Cross-listed papers appear once, with their categories and announcement date. Clearing search restores the current view. Search ignores case and accents.
 - Use **+** or **Settings** to add more arXiv category codes, such as `cs.AI`, `cs.CL`, `cs.CV`, `math.OC`, or `quant-ph`. Remove sections in Settings; at least one section remains.
 - Choose **Dark**, **Light**, or **System** appearance in Settings.
 - The arXiv and PDF controls beneath an abstract open the original paper in your default browser.

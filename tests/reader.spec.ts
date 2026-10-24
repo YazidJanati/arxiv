@@ -4,7 +4,7 @@ const fixture = readFileSync(new URL("./fixtures/catchup.html", import.meta.url)
 const oldAbstract = readFileSync(new URL("./fixtures/abstract.html", import.meta.url), "utf8");
 function daily(date: string): string {
   const label = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${date}T12:00:00Z`));
-  return fixture.replaceAll("{{DATE}}", label).replaceAll("A Fix for Softmax and Cross-Entropy", date === "2026-10-16" ? "Previous Week's Learning Paper" : "A Fix for Softmax and Cross-Entropy");
+  return fixture.replaceAll("{{DATE}}", label).replaceAll("2610.31642", date === "2026-10-16" ? "2610.20642" : "2610.31642").replaceAll("A Fix for Softmax and Cross-Entropy", date === "2026-10-16" ? "Previous Week's Learning Paper" : "A Fix for Softmax and Cross-Entropy");
 }
 async function openFriday(page: Page, category = "cs.LG", date = "2026-10-23") {
   await page.locator(`[data-day="${date}"]`).click();
@@ -69,7 +69,7 @@ test("search matches titles and authors without case or accent sensitivity", asy
   await openFriday(page);
   const search = page.getByRole("searchbox");
   await search.fill("SOFTMAX"); await expect(page.locator(".paper")).toHaveCount(1);
-  await search.fill("emilie martin"); await expect(page.locator(".paper")).toHaveCount(1);
+  await search.fill("emilie martin"); await expect(page.locator(".paper")).toHaveCount(2);
   await search.fill("Gupta"); await expect(page.locator(".paper-title")).toHaveText(/Cost-Aware/);
   await search.fill("missing author"); await expect(page.getByText("No matching papers.")).toBeVisible();
   await search.press("Escape"); await expect(page.locator(".paper")).toHaveCount(2);
@@ -81,7 +81,7 @@ test("bookmarking without opening a title saves its abstract for offline use", a
   await page.route("**/arxiv/**", (route) => route.abort());
   await page.reload(); await ready(page); await page.locator("#saved").click();
   await page.locator(".paper-title").click(); await expect(page.locator(".abstract")).toContainText("numerically stable");
-  await page.getByRole("searchbox").fill("barron"); await expect(page.locator(".paper")).toHaveCount(1);
+  await page.getByRole("searchbox").fill("barron"); await expect(page.locator(".paper")).toHaveCount(2);
   await page.getByRole("searchbox").fill("");
   await page.getByRole("button", { name: "Remove bookmark:", exact: false }).click();
   await expect(page.getByText("No bookmarks yet.")).toBeVisible();
@@ -216,4 +216,65 @@ test("a fetch crossing Monday cannot restore an expired day", async ({ page }) =
   release(); await fetch;
   const keys = await page.evaluate(async () => { const { cacheKeys } = await import("/src/platform.ts"); return cacheKeys(); });
   expect(keys.some((key) => key.endsWith("2026-10-12"))).toBe(false);
+});
+
+async function seedSearchPaper(page: Page, overrides: Record<string, string> = {}) {
+  await page.evaluate(async (overrides) => {
+    const { write } = await import("/src/platform.ts");
+    const paper = { id: "2610.19001", title: "Previous Statistics Result", authors: ["Mira Curie"], category: "stat.ML", date: "2026-10-14", abstract: "A complete cached abstract for a paper from another section in the previous week.", ...overrides };
+    await write(`day-v2-${paper.category}-${paper.date}`, { schema: 2, category: paper.category, date: paper.date, fetchedAt: Date.now(), papers: [paper] });
+  }, overrides);
+}
+test("search includes another section in the previous week and supports paper actions", async ({ page }) => {
+  await seedSearchPaper(page); await page.reload(); await ready(page); await openFriday(page);
+  let requests = 0; page.on("request", (request) => { if (request.url().includes("/arxiv/")) requests++; });
+  const search = page.getByRole("searchbox"); await search.fill("Mira Curie");
+  await expect(page.locator("#breadcrumb")).toHaveText("Search / both weeks");
+  await expect(page.locator(".paper-title")).toHaveText("Previous Statistics Result");
+  await expect(page.locator(".saved-meta")).toContainText("stat.ML · 14 Oct 2026");
+  await page.locator(".paper-title").click(); await expect(page.locator(".abstract")).toContainText("another section in the previous week");
+  await page.getByRole("button", { name: "Bookmark paper: Previous Statistics Result", exact: true }).click();
+  await expect.poll(() => page.evaluate(async () => { const { read } = await import("/src/platform.ts"); return (await read<any>("state"))?.bookmarks[0]?.id; })).toBe("2610.19001");
+  await search.fill(""); await expect(page.locator("#breadcrumb")).toHaveText("Friday / cs.LG");
+  await expect(page.locator(".paper")).toHaveCount(2); expect(requests).toBe(0);
+});
+test("search works from startup and is independent of the displayed week", async ({ page }) => {
+  const search = page.getByRole("searchbox"); await search.fill("Previous Week");
+  await expect(page.locator(".paper-title")).toHaveText("Previous Week's Learning Paper");
+  await page.locator("#week-label").click(); await page.locator("#previous-week").click();
+  await expect(search).toHaveValue("Previous Week"); await expect(page.locator(".paper")).toHaveCount(1);
+  await search.fill("softmax"); await expect(page.locator(".paper-title")).toHaveText("A Fix for Softmax and Cross-Entropy");
+  await expect(page.locator(".saved-meta")).toContainText("23 Oct 2026");
+  await search.fill(""); await expect(page.locator("#breadcrumb")).toHaveText("Previous week");
+});
+test("cross-listed search results are deduplicated with all sections shown", async ({ page }) => {
+  await page.getByRole("searchbox").fill("cost-aware");
+  await expect(page.locator(".paper")).toHaveCount(1);
+  await expect(page.locator(".saved-meta")).toHaveText("cs.LG, stat.ML · 23 Oct 2026");
+});
+test("older bookmarks stay saved but are excluded from the two-week search", async ({ page }) => {
+  await page.evaluate(async () => {
+    const { write } = await import("/src/platform.ts");
+    await write("state", { categories: ["cs.LG", "stat.ML"], theme: "dark", bookmarks: [{ id: "2401.00001", title: "Ancient Saved Result", authors: ["Old Author"], date: "2024-01-01", category: "cs.LG", abstract: "An older saved abstract." }] });
+  });
+  await page.reload(); await ready(page); await page.locator("#saved").click();
+  await expect(page.locator(".paper-title")).toHaveText("Ancient Saved Result");
+  await page.getByRole("searchbox").fill("Ancient Saved"); await expect(page.getByText("No matching papers.")).toBeVisible();
+  await page.getByRole("searchbox").fill("Previous Week"); await expect(page.locator(".paper-title")).toHaveText("Previous Week's Learning Paper");
+  await page.getByRole("searchbox").fill(""); await expect(page.locator(".paper-title")).toHaveText("Ancient Saved Result");
+});
+test("cached search remains complete when another uncached day cannot download", async ({ page }) => {
+  await seedSearchPaper(page); await removeDay(page);
+  await page.route("**/arxiv/**", (route) => route.abort()); await page.reload();
+  await expect(page.locator("#source-label")).toHaveText("Cache incomplete · will retry");
+  await page.getByRole("searchbox").fill("Mira Curie"); await expect(page.locator(".paper-title")).toHaveText("Previous Statistics Result");
+});
+test("rolling the window forward removes expired papers from an active search", async ({ page }) => {
+  await seedSearchPaper(page, { id: "2610.10001", title: "Window Boundary Result from the oldest week", date: "2026-10-12" });
+  await seedSearchPaper(page, { id: "2610.30001", title: "Window Boundary Result to retain", date: "2026-10-23", category: "cs.LG" });
+  await page.reload(); await ready(page); await page.getByRole("searchbox").fill("Window Boundary Result");
+  await expect(page.locator(".paper")).toHaveCount(2);
+  await page.clock.setSystemTime(new Date("2026-10-26T12:00:00+01:00")); await page.clock.runFor(60000); await ready(page);
+  await expect(page.getByRole("searchbox")).toHaveValue("Window Boundary Result");
+  await expect(page.locator(".paper-title")).toHaveText("Window Boundary Result to retain");
 });

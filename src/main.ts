@@ -13,6 +13,11 @@ let currentMonday = weekDays()[0], displayedMonday = currentMonday;
 let days = weekDays(), selection: Selection | null = null, mode: "day" | "saved" = "day";
 let papers: Paper[] = [], loading = false, error = "", cacheTime: number | null = null, query = "", epoch = 0;
 const windowFeeds = new Map<string, DayFeed>();
+let windowIndex: { key: string; papers: SearchPaper[] } | null = null;
+const searchText = new WeakMap<Paper, string>();
+let searchFrame = 0;
+let resultPapers: Paper[] = [], renderedCount = 0, resultViewKey = "";
+const resultBatchSize = 60;
 const searching = () => query.trim().length > 0;
 const windowSearching = () => searching() && mode !== "saved";
 const expandedDays = new Set<string>();
@@ -98,12 +103,24 @@ function renderSidebar(): void {
 }
 function normalize(value: string): string { return value.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLocaleLowerCase(); }
 function viewPapers(): Paper[] {
-  return mode === "saved" ? state.bookmarks : searching() ? windowPapers(windowFeeds.values(), state.categories) : papers;
+  if (mode === "saved") return state.bookmarks;
+  if (!searching()) return papers;
+  const key = `${today()}:${state.categories.join(",")}`;
+  if (!windowIndex || windowIndex.key !== key) windowIndex = { key, papers: windowPapers(windowFeeds.values(), state.categories) };
+  return windowIndex.papers;
 }
 function visiblePapers(): Paper[] {
   const all = viewPapers();
   const terms = normalize(query).split(/\s+/).filter(Boolean);
-  return all.filter((paper) => { const haystack = normalize(`${paper.title} ${paper.authors.join(" ")}`); return terms.every((term) => haystack.includes(term)); });
+  if (!terms.length) return all;
+  return all.filter((paper) => {
+    let haystack = searchText.get(paper);
+    if (haystack === undefined) {
+      haystack = normalize(`${paper.title} ${paper.authors.join(" ")}`);
+      searchText.set(paper, haystack);
+    }
+    return terms.every((term) => haystack.includes(term));
+  });
 }
 function paperMarkup(paper: Paper, index: number): string {
   const open = expandedPapers.has(paper.id), saved = state.bookmarks.some((p) => p.id === paper.id);
@@ -113,9 +130,38 @@ function paperMarkup(paper: Paper, index: number): string {
   return `<article class="paper" data-paper="${escape(paper.id)}"><div class="paper-top"><div class="paper-text"><button class="paper-title" data-action="toggle" aria-expanded="${open}" aria-controls="abstract-${index}" id="title-${index}">${escape(paper.title)}</button><p class="authors">${escape(paper.authors.join(", "))}</p>${mode === "saved" || searching() ? `<p class="saved-meta">${escape(categories.join(", "))} · ${formatDate(paper.date, { day: "numeric", month: "short", year: "numeric" })}</p>` : ""}</div><button class="icon-button bookmark ${saved ? "is-saved" : ""}" data-action="bookmark" aria-label="${saved ? "Remove bookmark" : "Bookmark paper"}: ${escape(paper.title)}" aria-pressed="${saved}" title="${saved ? "Remove bookmark" : "Bookmark paper"}">${icon("bookmark")}</button></div>
   <div class="abstract" id="abstract-${index}" role="region" aria-labelledby="title-${index}" ${open ? "" : "hidden"}>${abstract ? `<p>${escape(abstract)}</p>` : abstractError ? `<p class="abstract-error">${escape(abstractError)} <button data-action="retry-abstract">Try again</button></p>` : '<p class="hint" role="status">Loading abstract…</p>'}<div class="paper-links"><button data-action="open">arXiv ${icon("external")}</button><button data-action="pdf">PDF ${icon("external")}</button><span>${escape(paper.id)}</span></div></div></article>`;
 }
+// Keep the initial render small even when a one-letter search matches thousands
+// of papers. Every match remains available; scrolling appends the next batch.
+const morePapers = document.createElement("div");
+morePapers.style.height = "1px";
+morePapers.setAttribute("aria-hidden", "true");
+const resultObserver = new IntersectionObserver((entries) => {
+  if (morePapers.isConnected && entries.some((entry) => entry.isIntersecting)) appendResults();
+}, { root: $("reader"), rootMargin: "400px" });
+function appendResults(batchSize = resultBatchSize): void {
+  const start = renderedCount;
+  renderedCount = Math.min(start + batchSize, resultPapers.length);
+  morePapers.insertAdjacentHTML("beforebegin", resultPapers.slice(start, renderedCount).map((paper, i) => paperMarkup(paper, start + i)).join(""));
+  if (renderedCount === resultPapers.length) { resultObserver.disconnect(); morePapers.remove(); }
+  else {
+    // Re-observe after moving the sentinel to catch a batch that still fits
+    // inside a tall window without requiring another scroll event.
+    resultObserver.unobserve(morePapers); resultObserver.observe(morePapers);
+  }
+}
 function renderPapers(): void {
+  cancelAnimationFrame(searchFrame); searchFrame = 0;
+  resultObserver.disconnect(); resultObserver.takeRecords();
+  const viewKey = `${mode}:${mode === "saved" ? "" : `${selection?.date}:${selection?.category}`}:${query}`;
+  const initialBatch = viewKey === resultViewKey ? Math.max(resultBatchSize, renderedCount) : resultBatchSize;
+  resultViewKey = viewKey; resultPapers = []; renderedCount = 0;
   const visible = visiblePapers();
   const activeSearch = searching(), total = viewPapers().length;
+  $("days").querySelectorAll<HTMLElement>(".section-row").forEach((row) => {
+    const selected = !activeSearch && mode === "day" && row.dataset.date === selection?.date && row.dataset.category === selection?.category;
+    row.classList.toggle("selected", selected);
+    if (selected) row.setAttribute("aria-current", "page"); else row.removeAttribute("aria-current");
+  });
   $("refresh").classList.toggle("loading", windowSearching() ? cacheProgress.startsWith("Caching") : loading);
   ($("refresh") as HTMLButtonElement).disabled = windowSearching() ? cacheProgress.startsWith("Caching") : loading || mode === "saved" || !selection;
   $("reader").setAttribute("aria-busy", String(loading && !activeSearch));
@@ -133,7 +179,11 @@ function renderPapers(): void {
   const title = activeSearch ? "Search results" : mode === "saved" ? "Bookmarks" : selection!.category;
   const subtitle = activeSearch && mode === "saved" ? "All saved papers · any date" : activeSearch ? `${formatDate(offsetDate(currentMonday, -7), { day: "numeric", month: "short" })}–${formatDate(today(), { day: "numeric", month: "short", year: "numeric" })} · all sections` : mode === "saved" ? "Papers to come back to." : formatDate(selection!.date, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   $("view-heading").innerHTML = `<h1>${escape(title)}</h1><p>${escape(subtitle)}</p>`;
-  if (visible.length) $("papers").innerHTML = visible.map(paperMarkup).join("");
+  if (visible.length) {
+    resultPapers = visible;
+    $("papers").replaceChildren(morePapers);
+    appendResults(initialBatch);
+  }
   else {
     let message = "No papers for this day.", detail = "There may be a holiday or no new announcements in this section.";
     if (activeSearch) {
@@ -228,7 +278,7 @@ $("saved").onclick = () => {
 $("papers").onclick = (event) => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-action]");
   const article = button?.closest<HTMLElement>("article");
-  const paper = viewPapers().find((p) => p.id === article?.dataset.paper);
+  const paper = resultPapers.find((p) => p.id === article?.dataset.paper);
   if (!button || !paper || !article) return;
   const action = button.dataset.action;
   if (action === "toggle") {
@@ -255,7 +305,13 @@ $("papers").onclick = (event) => {
     void openExternal(`https://arxiv.org/${action === "pdf" ? "pdf" : "abs"}/${paper.id}`).catch((cause) => notice(String(cause)));
   }
 };
-$("search").oninput = () => { query = $<HTMLInputElement>("search").value; renderSidebar(); renderPapers(); $("reader").scrollTop = 0; };
+$("search").oninput = () => {
+  query = $<HTMLInputElement>("search").value;
+  // Input itself does no filtering or DOM rebuilding. Coalesce rapid changes
+  // into one frame and leave the sidebar alone while refining a query.
+  cancelAnimationFrame(searchFrame);
+  searchFrame = requestAnimationFrame(() => { renderPapers(); $("reader").scrollTop = 0; });
+};
 $("refresh").onclick = () => { if (searching()) void maintainAndWarm(true); else { void loadSelection(true); void maintainAndWarm(); } };
 $("feed-notice").onclick = (event) => { if ((event.target as HTMLElement).closest("#retry-feed")) void loadSelection(true); };
 $("toggle-sidebar").onclick = () => document.body.classList.toggle("sidebar-hidden");
@@ -334,6 +390,7 @@ document.addEventListener("keydown", (event) => {
 function absorbFeed(feed: DayFeed, render = true): void {
   if (!inWindow(feed.date) || !state.categories.includes(feed.category)) return;
   windowFeeds.set(`${feed.category}:${feed.date}`, feed);
+  windowIndex = null;
   let changed = false;
   for (const paper of feed.papers) {
     const bookmark = state.bookmarks.find((saved) => saved.id === paper.id);
@@ -349,11 +406,13 @@ async function maintainAndWarm(force = false): Promise<void> {
   const generation = ++warmEpoch;
   lastWarm = Date.now();
   const categories = [...state.categories];
+  cacheProgress = "Caching listings + abstracts · checking saved days"; renderCacheStatus();
   try {
     await pruneCache(categories);
     if (generation !== warmEpoch) return;
     const jobs = windowDates().flatMap((date) => categories.map((category) => ({ date, category })));
     for (const [key, feed] of windowFeeds) if (!inWindow(feed.date) || !categories.includes(feed.category)) windowFeeds.delete(key);
+    windowIndex = null;
     let done = 0;
     cacheProgress = `Caching listings + abstracts · ${done}/${jobs.length} days`; renderCacheStatus();
     // Index every available snapshot first. A missing day or a slow network

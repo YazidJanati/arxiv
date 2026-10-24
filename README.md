@@ -2,16 +2,60 @@
 
 A minimal macOS reader for daily arXiv papers, styled after [text](https://github.com/YazidJanati/text): a narrow sidebar, monospace type, quiet colors, and a plain reading pane.
 
-## Reading
+## Current functionality
 
-- Open a weekday in the left sidebar, then select **cs.LG** or **stat.ML**.
-- Click the week label above the days to choose **This week** or **Previous week**. Each launch starts on the current week.
-- Read paper titles and authors. Click a title to expand or collapse its abstract.
-- Use the bookmark beside a paper to save it. **Bookmarks** collects saved papers across days and sections.
-- Search all subscribed sections across both retained weeks by title and author name. In **Bookmarks**, the search covers **all saved papers from any date**, including sections you no longer follow. Cross-listed papers appear once, with their categories and announcement date. Clearing search restores the current view. Search ignores case and accents.
-- Use **+** or **Settings** to add more arXiv category codes, such as `cs.AI`, `cs.CL`, `cs.CV`, `math.OC`, or `quant-ph`. Remove sections in Settings; at least one section remains.
-- Choose **Dark**, **Light**, or **System** appearance in Settings.
-- The arXiv and PDF controls beneath an abstract open the original paper in your default browser.
+### Browsing and reading
+
+- A Monday–Sunday list in the left sidebar, with dates and a marker for today.
+- Expand a day to see its sections; opening another day closes the previous one. Click a section to open its papers in the main reading pane.
+- **cs.LG** and **stat.ML** are followed by default. Add any arXiv category code through **+** or **Settings**, with common-category suggestions, duplicate checks, and a link to the official category list. Remove sections in Settings; at least one section remains.
+- Click the week label to switch between **This week** and **Previous week**. Each launch starts on the current week.
+- Lists use actual announcement dates and include new submissions and cross-lists, with pagination; replacement announcements are excluded.
+- Paper titles appear in **bold arXiv crimson (`#b31b1b`)**, with authors underneath. Click a title to expand or collapse its complete abstract inline.
+- The **arXiv** and **PDF** controls beneath an abstract open the original paper in your default browser. The arXiv ID is also shown.
+- Manual refresh, loading indicators, paper/result counts, cache timestamps, and retry controls for failed requests.
+- Clear empty states for weekends, future dates, unavailable announcements, no search matches, and an empty bookmark collection.
+
+### Search
+
+- Search by title and author across **every followed section**, from the beginning of the previous calendar week through today, independently of the selected day or displayed week. Search also works before opening a day.
+- Matches ignore case and accents; multiple search terms must all match the title/author text.
+- Cross-listed search results appear once, with all matched sections and their announcement date, newest first.
+- A reusable in-memory index and batched result rendering keep typing responsive for large collections. All matches remain searchable and more rows appear automatically as you scroll.
+- Results update as background caching completes; already cached papers remain searchable if another listing cannot download.
+- Clearing search restores the selected reading view. Switching the displayed week preserves an active query.
+- In **Bookmarks**, search covers **all saved papers from any date and section**, including sections you no longer follow.
+
+### Bookmarks
+
+- Save or remove a paper using its bookmark button, with a saved-state indicator and a sidebar count.
+- Saving includes its full abstract even if you never expanded the title.
+- Bookmarks have **no day, week, or year limit**. They remain until you explicitly remove them, independently of the rolling cache and followed sections.
+- Read and search saved papers offline, after restarting the app, after removing their section, and across calendar rollovers.
+- An open bookmark, expanded abstract, and bookmark search stay open when the reading window rolls into a new week.
+- Previously cached abstracts from the original app are migrated into the saved collection before old cache files are deleted.
+
+### Caching and offline reading
+
+- Automatically preload listings **and full abstracts** for all available weekdays in the current and previous weeks, across every followed section, newest days first.
+- Read a day while other days download; footer progress reports cache completion or an interrupted download.
+- Cached abstracts expand immediately without a separate request. Cached listings and abstracts remain readable offline.
+- Automatic retries during later cache checks, plus manual refresh. Completed announcement days are reused; current-day snapshots are rechecked after 30 minutes.
+- A rolling two-calendar-week cache: expired day snapshots and their abstracts are deleted at startup or after Monday rollover. Removing a section also removes its disposable cache. **Bookmarks and preferences are preserved.**
+- Serialized native requests, at least three seconds apart, with response validation and safe fallback to cached data.
+- No PDFs or remote HTML are stored; native HTTP response caching is disabled.
+
+### Appearance, navigation, and local storage
+
+- Minimal monospace interface with a narrow sidebar and plain paper rows, styled after text.
+- **Dark**, **Light**, or **System** appearance, saved across launches and reflected in the native window.
+- Show or hide the sidebar using its toolbar button or keyboard shortcut.
+- Native macOS menus, a resizable window with remembered size/position, and standard copy/paste and text-selection controls.
+- Keyboard shortcuts: **⌘F** search, **⌘B** sidebar, **⌘R** refresh, **⌘,** settings, **F1** help, and **Esc** clear search or close a dialog. Tab, Shift+Tab, Enter, and Space navigation are supported.
+- Categories, appearance, bookmarks, and cached papers stay on your Mac. Atomic saves, a save-failure notice with retry, and a quit-time check protect pending bookmark/preference changes.
+- No accounts, telemetry, or cloud synchronization.
+
+## Cache behavior and retention
 
 The app keeps exactly two local calendar weeks: the current Monday–Sunday week and the preceding Monday–Sunday week. Daily lists use **arXiv's actual announcement dates**, not the paper's submission timestamp. Weekends, future dates, and days without announcements display an empty state. Global arXiv search and browsing older weeks are outside this version's scope.
 
@@ -72,7 +116,7 @@ npm test               # Chromium + WebKit integration tests
 
 The browser preview uses Vite's local arXiv proxy and IndexedDB storage; native networking, request spacing, native menus, and disk storage belong to the installed app. Browser and native preferences are separate.
 
-Tests use deterministic arXiv-shaped fixtures and cover complete abstract preloading, current/previous week selection, offline expansion without extra requests, bookmarks saved before expansion, migration, exact two-week eviction, year boundaries, Monday rollover, in-flight request races, pagination, missing abstracts, malformed dates, search, settings, and escaping imported text. Normal tests do not call arXiv.
+Tests use deterministic arXiv-shaped fixtures and cover complete abstract preloading, current/previous week selection, offline expansion without extra requests, bookmarks saved before expansion, migration, exact two-week eviction, year boundaries, Monday rollover, in-flight request races, pagination, missing abstracts, malformed dates, title/author search, large-result input and scroll batching, settings, and escaping imported text. Normal tests do not call arXiv.
 
 For a live installed-app smoke test, quit the app, then run:
 
@@ -87,6 +131,7 @@ Keyboard shortcuts: `⌘F` search, `⌘B` sidebar, `⌘R` refresh, `⌘,` settin
 ## Source layout
 
 - `src/main.ts` — reader interface and state
+- `src/search.ts` — deduplicated search across the retained calendar window
 - `src/source.ts` — complete daily snapshots, two-week retention, pagination, and bookmark fallback
 - `src/platform.ts` — native messaging and browser fallback
 - `src/dates.ts` — calendar-week and announcement-date handling

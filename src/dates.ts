@@ -12,8 +12,15 @@ export function weekDays(iso = today()): string[] {
   const monday = offsetDate(iso, -((dateObject(iso).getUTCDay() + 6) % 7));
   return Array.from({ length: 7 }, (_, i) => offsetDate(monday, i));
 }
+const dateFormatters = new Map<string, Intl.DateTimeFormat>();
 export function formatDate(iso: string, options: Intl.DateTimeFormatOptions): string {
-  return new Intl.DateTimeFormat("en-GB", { ...options, timeZone: "UTC" }).format(dateObject(iso));
+  const key = JSON.stringify(options);
+  let formatter = dateFormatters.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-GB", { ...options, timeZone: "UTC" });
+    dateFormatters.set(key, formatter);
+  }
+  return formatter.format(dateObject(iso));
 }
 export const isWeekend = (iso: string) => [0, 6].includes(dateObject(iso).getUTCDay());
 export function listingDate(text: string): string | null {

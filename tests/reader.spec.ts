@@ -70,7 +70,7 @@ test("search matches titles and authors without case or accent sensitivity", asy
   const search = page.getByRole("searchbox");
   await search.fill("SOFTMAX"); await expect(page.locator(".paper")).toHaveCount(1);
   await search.fill("emilie martin"); await expect(page.locator(".paper")).toHaveCount(2);
-  await search.fill("Gupta"); await expect(page.locator(".paper-title")).toHaveText(/Cost-Aware/);
+  await search.fill("Gupta"); await expect(page.locator(".paper-title")).toHaveText([/Cost-Aware/]);
   await search.fill("missing author"); await expect(page.getByText("No matching papers.")).toBeVisible();
   await search.press("Escape"); await expect(page.locator(".paper")).toHaveCount(2);
 });
@@ -295,7 +295,7 @@ test("bookmarks from arbitrary weeks and unfollowed sections survive rollover, c
   });
   await page.reload(); await ready(page); await page.locator("#saved").click();
   await expect(page.locator(".paper")).toHaveCount(2);
-  await page.getByRole("searchbox").fill("Ada Researcher"); await page.locator(".paper-title").click();
+  await page.getByRole("searchbox").fill("Ada Researcher"); await expect(page.locator(".paper-title")).toHaveText(["Older saved robotics paper"]); await page.locator(".paper-title").click();
   for (const date of ["2026-10-26T12:00:00+01:00", "2026-11-02T12:00:00+01:00"]) {
     await page.clock.setSystemTime(new Date(date)); await page.clock.runFor(60000);
     await expect(page.locator("#breadcrumb")).toHaveText("Search / bookmarks");
@@ -306,9 +306,51 @@ test("bookmarks from arbitrary weeks and unfollowed sections survive rollover, c
   await page.route("**/arxiv/**", (route) => route.abort()); await page.reload();
   await expect(page.locator("[data-day]")).toHaveCount(7); await page.locator("#saved").click();
   await expect(page.locator(".paper")).toHaveCount(2);
-  await page.getByRole("searchbox").fill("Bea Researcher"); await page.locator(".paper-title").click();
+  await page.getByRole("searchbox").fill("Bea Researcher"); await expect(page.locator(".paper-title")).toHaveText(["Saved paper from another month"]); await page.locator(".paper-title").click();
   await expect(page.locator(".abstract")).toContainText("another month");
   await page.getByRole("button", { name: "Remove bookmark: Saved paper from another month", exact: true }).click();
   await expect(page.getByText("No matching papers.")).toBeVisible();
   await page.getByRole("searchbox").fill(""); await expect(page.locator(".paper-title")).toHaveText("Older saved robotics paper");
+});
+
+
+test("large cached searches leave input events light and reveal every match in scroll batches", async ({ page }) => {
+  await page.evaluate(async () => {
+    const { write } = await import("/src/platform.ts");
+    const papers = Array.from({ length: 4000 }, (_, i) => ({
+      id: `2610.${String(i).padStart(5, "0")}`, title: `Batch candidate ${i === 0 ? "targetzero" : i}`,
+      authors: ["Émilie Researcher"], category: "cs.LG", date: "2026-10-23",
+      abstract: `Complete abstract for candidate ${i}. `.repeat(50),
+    }));
+    await write("day-v2-cs.LG-2026-10-23", { schema: 2, category: "cs.LG", date: "2026-10-23", fetchedAt: Date.now(), papers });
+  });
+  await page.reload(); await ready(page);
+  // Observe the input event itself: rendering must happen after it returns,
+  // and rapid inputs must discard the superseded result work.
+  const mutations = await page.evaluate(() => {
+    const observer = new MutationObserver(() => {});
+    observer.observe(document.getElementById("app")!, { subtree: true, childList: true, attributes: true, characterData: true });
+    const input = document.getElementById("search") as HTMLInputElement;
+    for (const query of ["B", "Batch", "Batch candidate"]) {
+      input.value = query; input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    const count = observer.takeRecords().length; observer.disconnect(); return count;
+  });
+  expect(mutations).toBe(0);
+  await expect(page.locator("#status")).toContainText("4000 results");
+  await expect(page.locator(".paper")).toHaveCount(60);
+  await expect(page.locator(".paper-title").first()).toHaveText("Batch candidate 3999");
+  await page.locator(".paper-title").last().scrollIntoViewIfNeeded();
+  await expect(page.locator(".paper")).toHaveCount(120);
+  await page.locator(".paper-title").nth(70).click();
+  await expect(page.locator(".abstract").nth(70)).toBeVisible();
+  await expect(page.locator(".abstract").nth(70)).toContainText("Complete abstract for candidate 3929");
+  // Searching targets the full index, including matches not yet in the DOM.
+  const search = page.getByRole("searchbox");
+  await search.fill("targetzero"); await expect(page.locator(".paper-title")).toHaveText(["Batch candidate targetzero"]);
+  await page.getByRole("button", { name: "Bookmark paper: Batch candidate targetzero", exact: true }).click();
+  await page.locator("#saved").click();
+  await search.fill("emilie researcher"); await expect(page.locator(".paper-title")).toHaveText("Batch candidate targetzero");
+  await search.fill("missing"); await search.press("Escape");
+  await expect(search).toHaveValue(""); await expect(page.locator(".paper-title")).toHaveText("Batch candidate targetzero");
 });

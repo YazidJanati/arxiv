@@ -81,7 +81,7 @@ test("bookmarking without opening a title saves its abstract for offline use", a
   await page.route("**/arxiv/**", (route) => route.abort());
   await page.reload(); await ready(page); await page.locator("#saved").click();
   await page.locator(".paper-title").click(); await expect(page.locator(".abstract")).toContainText("numerically stable");
-  await page.getByRole("searchbox").fill("barron"); await expect(page.locator(".paper")).toHaveCount(2);
+  await page.getByRole("searchbox").fill("barron"); await expect(page.locator(".paper")).toHaveCount(1);
   await page.getByRole("searchbox").fill("");
   await page.getByRole("button", { name: "Remove bookmark:", exact: false }).click();
   await expect(page.getByText("No bookmarks yet.")).toBeVisible();
@@ -252,16 +252,22 @@ test("cross-listed search results are deduplicated with all sections shown", asy
   await expect(page.locator(".paper")).toHaveCount(1);
   await expect(page.locator(".saved-meta")).toHaveText("cs.LG, stat.ML · 23 Oct 2026");
 });
-test("older bookmarks stay saved but are excluded from the two-week search", async ({ page }) => {
+test("older bookmarks remain searchable without affecting the main two-week search", async ({ page }) => {
   await page.evaluate(async () => {
     const { write } = await import("/src/platform.ts");
     await write("state", { categories: ["cs.LG", "stat.ML"], theme: "dark", bookmarks: [{ id: "2401.00001", title: "Ancient Saved Result", authors: ["Old Author"], date: "2024-01-01", category: "cs.LG", abstract: "An older saved abstract." }] });
   });
   await page.reload(); await ready(page); await page.locator("#saved").click();
   await expect(page.locator(".paper-title")).toHaveText("Ancient Saved Result");
-  await page.getByRole("searchbox").fill("Ancient Saved"); await expect(page.getByText("No matching papers.")).toBeVisible();
-  await page.getByRole("searchbox").fill("Previous Week"); await expect(page.locator(".paper-title")).toHaveText("Previous Week's Learning Paper");
+  await expect(page.getByRole("searchbox")).toHaveAttribute("placeholder", "Search all bookmarks");
+  await page.getByRole("searchbox").fill("Ancient Saved"); await expect(page.locator(".paper-title")).toHaveText("Ancient Saved Result");
+  await expect(page.locator("#breadcrumb")).toHaveText("Search / bookmarks");
+  await page.getByRole("searchbox").fill("Old Author"); await expect(page.locator(".paper-title")).toHaveText("Ancient Saved Result");
+  await page.locator(".paper-title").click(); await expect(page.locator(".abstract")).toContainText("older saved abstract");
+  await page.getByRole("searchbox").fill("Previous Week"); await expect(page.getByText("No matching papers.")).toBeVisible();
   await page.getByRole("searchbox").fill(""); await expect(page.locator(".paper-title")).toHaveText("Ancient Saved Result");
+  await openFriday(page); await page.getByRole("searchbox").fill("Ancient Saved");
+  await expect(page.getByText("No matching papers.")).toBeVisible();
 });
 test("cached search remains complete when another uncached day cannot download", async ({ page }) => {
   await seedSearchPaper(page); await removeDay(page);
@@ -277,4 +283,32 @@ test("rolling the window forward removes expired papers from an active search", 
   await page.clock.setSystemTime(new Date("2026-10-26T12:00:00+01:00")); await page.clock.runFor(60000); await ready(page);
   await expect(page.getByRole("searchbox")).toHaveValue("Window Boundary Result");
   await expect(page.locator(".paper-title")).toHaveText("Window Boundary Result to retain");
+});
+
+test("bookmarks from arbitrary weeks and unfollowed sections survive rollover, cleanup, and offline reload", async ({ page }) => {
+  await page.evaluate(async () => {
+    const { write } = await import("/src/platform.ts");
+    await write("state", { categories: ["cs.LG", "stat.ML"], theme: "dark", bookmarks: [
+      { id: "2401.00001", title: "Older saved robotics paper", authors: ["Ada Researcher"], date: "2024-01-03", category: "cs.RO", abstract: "The full abstract of the older saved robotics paper." },
+      { id: "2606.00002", title: "Saved paper from another month", authors: ["Bea Researcher"], date: "2026-06-01", category: "math.OC", abstract: "The full abstract of a saved paper from another month." },
+    ] });
+  });
+  await page.reload(); await ready(page); await page.locator("#saved").click();
+  await expect(page.locator(".paper")).toHaveCount(2);
+  await page.getByRole("searchbox").fill("Ada Researcher"); await page.locator(".paper-title").click();
+  for (const date of ["2026-10-26T12:00:00+01:00", "2026-11-02T12:00:00+01:00"]) {
+    await page.clock.setSystemTime(new Date(date)); await page.clock.runFor(60000);
+    await expect(page.locator("#breadcrumb")).toHaveText("Search / bookmarks");
+    await expect(page.locator(".paper-title")).toHaveText("Older saved robotics paper");
+    await expect(page.locator(".abstract")).toContainText("older saved robotics paper");
+    await expect(page.locator(".abstract")).toBeVisible();
+  }
+  await page.route("**/arxiv/**", (route) => route.abort()); await page.reload();
+  await expect(page.locator("[data-day]")).toHaveCount(7); await page.locator("#saved").click();
+  await expect(page.locator(".paper")).toHaveCount(2);
+  await page.getByRole("searchbox").fill("Bea Researcher"); await page.locator(".paper-title").click();
+  await expect(page.locator(".abstract")).toContainText("another month");
+  await page.getByRole("button", { name: "Remove bookmark: Saved paper from another month", exact: true }).click();
+  await expect(page.getByText("No matching papers.")).toBeVisible();
+  await page.getByRole("searchbox").fill(""); await expect(page.locator(".paper-title")).toHaveText("Older saved robotics paper");
 });

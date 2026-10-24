@@ -8,7 +8,7 @@ A minimal macOS reader for daily arXiv papers, styled after [text](https://githu
 - Click the week label above the days to choose **This week** or **Previous week**. Each launch starts on the current week.
 - Read paper titles and authors. Click a title to expand or collapse its abstract.
 - Use the bookmark beside a paper to save it. **Bookmarks** collects saved papers across days and sections.
-- Search all subscribed sections across both retained weeks by title and author name, from any view. Cross-listed papers appear once, with their categories and announcement date. Clearing search restores the current view. Search ignores case and accents.
+- Search all subscribed sections across both retained weeks by title and author name. In **Bookmarks**, the search covers **all saved papers from any date**, including sections you no longer follow. Cross-listed papers appear once, with their categories and announcement date. Clearing search restores the current view. Search ignores case and accents.
 - Use **+** or **Settings** to add more arXiv category codes, such as `cs.AI`, `cs.CL`, `cs.CV`, `math.OC`, or `quant-ph`. Remove sections in Settings; at least one section remains.
 - Choose **Dark**, **Light**, or **System** appearance in Settings.
 - The arXiv and PDF controls beneath an abstract open the original paper in your default browser.
@@ -23,7 +23,7 @@ Final snapshots of completed announcement days are reused. Snapshots taken durin
 
 Expired snapshots are deleted on launch, on the first calendar check after Monday rollover, and when a section is removed. Calendar checks run every minute while the app is open and when its window receives focus. If the app stays closed across a rollover, cleanup occurs at its next launch. Both titles and abstracts live in each daily snapshot and expire together. In-flight requests cannot recreate a snapshot that has fallen outside the window or belongs to a removed section. No PDFs or remote HTML pages are saved. Native HTTP response caching is disabled.
 
-**Bookmarks are your saved collection, separate from the rolling cache.** They remain until you remove them, including older saved papers and their abstracts. During the first launch of this update, previously cached bookmark abstracts are copied into the bookmark collection before legacy cache files are deleted.
+**Bookmarks are your saved collection, separate from the rolling cache.** They remain until you remove them, including older saved papers and their abstracts. The Bookmarks view and its search have no week limit, survive calendar rollover, and do not depend on the sections you currently follow. During the first launch of this update, previously cached bookmark abstracts are copied into the bookmark collection before legacy cache files are deleted.
 
 arXiv's HTML is parsed as text in an inert document. Paper metadata is escaped before display. The native bridge restricts networking to arXiv's daily catch-up pages, category listings, and paper abstracts. Cleanup can remove only managed paper-cache files; it cannot delete preferences or bookmarks.
 

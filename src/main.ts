@@ -14,6 +14,7 @@ let days = weekDays(), selection: Selection | null = null, mode: "day" | "saved"
 let papers: Paper[] = [], loading = false, error = "", cacheTime: number | null = null, query = "", epoch = 0;
 const windowFeeds = new Map<string, DayFeed>();
 const searching = () => query.trim().length > 0;
+const windowSearching = () => searching() && mode !== "saved";
 const expandedDays = new Set<string>();
 const expandedPapers = new Set<string>();
 const abstractValues = new Map<string, string>();
@@ -91,13 +92,13 @@ function renderSidebar(): void {
   }).join("");
   // The small category mark deliberately matches text's file rows.
   $("days").querySelectorAll<SVGElement>(".section-row svg").forEach((svg) => { svg.innerHTML = '<path d="M6 3h8l4 4v14H6Z"/><path d="M14 3v5h4"/>'; });
-  $("saved").classList.toggle("selected", mode === "saved" && !searching());
-  if (mode === "saved" && !searching()) $("saved").setAttribute("aria-current", "page"); else $("saved").removeAttribute("aria-current");
+  $("saved").classList.toggle("selected", mode === "saved");
+  if (mode === "saved") $("saved").setAttribute("aria-current", "page"); else $("saved").removeAttribute("aria-current");
   $("saved-count").textContent = state.bookmarks.length ? String(state.bookmarks.length) : "";
 }
 function normalize(value: string): string { return value.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLocaleLowerCase(); }
 function viewPapers(): Paper[] {
-  return searching() ? windowPapers(windowFeeds.values(), state.categories) : mode === "saved" ? state.bookmarks : papers;
+  return mode === "saved" ? state.bookmarks : searching() ? windowPapers(windowFeeds.values(), state.categories) : papers;
 }
 function visiblePapers(): Paper[] {
   const all = viewPapers();
@@ -115,12 +116,12 @@ function paperMarkup(paper: Paper, index: number): string {
 function renderPapers(): void {
   const visible = visiblePapers();
   const activeSearch = searching(), total = viewPapers().length;
-  $("refresh").classList.toggle("loading", activeSearch ? cacheProgress.startsWith("Caching") : loading);
-  ($("refresh") as HTMLButtonElement).disabled = activeSearch ? cacheProgress.startsWith("Caching") : loading || mode === "saved" || !selection;
+  $("refresh").classList.toggle("loading", windowSearching() ? cacheProgress.startsWith("Caching") : loading);
+  ($("refresh") as HTMLButtonElement).disabled = windowSearching() ? cacheProgress.startsWith("Caching") : loading || mode === "saved" || !selection;
   $("reader").setAttribute("aria-busy", String(loading && !activeSearch));
-  $("breadcrumb").textContent = activeSearch ? "Search / both weeks" : mode === "saved" ? "Bookmarks" : selection ? `${formatDate(selection.date, { weekday: "long" })} / ${selection.category}` : displayedMonday === currentMonday ? "This week" : "Previous week";
+  $("breadcrumb").textContent = activeSearch ? (mode === "saved" ? "Search / bookmarks" : "Search / both weeks") : mode === "saved" ? "Bookmarks" : selection ? `${formatDate(selection.date, { weekday: "long" })} / ${selection.category}` : displayedMonday === currentMonday ? "This week" : "Previous week";
   renderCacheStatus();
-  $("search").setAttribute("placeholder", "Search both weeks");
+  $("search").setAttribute("placeholder", mode === "saved" ? "Search all bookmarks" : "Search both weeks");
   $("feed-notice").innerHTML = error && !activeSearch ? `<span>${escape(error)}</span> <button id="retry-feed">Try again</button>` : "";
   $("feed-notice").hidden = !error || activeSearch;
   if (!activeSearch && mode === "day" && !selection) {
@@ -130,14 +131,14 @@ function renderPapers(): void {
     return;
   }
   const title = activeSearch ? "Search results" : mode === "saved" ? "Bookmarks" : selection!.category;
-  const subtitle = activeSearch ? `${formatDate(offsetDate(currentMonday, -7), { day: "numeric", month: "short" })}–${formatDate(today(), { day: "numeric", month: "short", year: "numeric" })} · all sections` : mode === "saved" ? "Papers to come back to." : formatDate(selection!.date, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  const subtitle = activeSearch && mode === "saved" ? "All saved papers · any date" : activeSearch ? `${formatDate(offsetDate(currentMonday, -7), { day: "numeric", month: "short" })}–${formatDate(today(), { day: "numeric", month: "short", year: "numeric" })} · all sections` : mode === "saved" ? "Papers to come back to." : formatDate(selection!.date, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   $("view-heading").innerHTML = `<h1>${escape(title)}</h1><p>${escape(subtitle)}</p>`;
   if (visible.length) $("papers").innerHTML = visible.map(paperMarkup).join("");
   else {
     let message = "No papers for this day.", detail = "There may be a holiday or no new announcements in this section.";
     if (activeSearch) {
       message = "No matching papers.";
-      detail = cacheProgress.startsWith("Caching") ? "Still caching both weeks; results update as papers arrive." : cacheProgress.startsWith("Cache incomplete") ? "Some listings are unavailable. Search covers the cached papers." : "Try a different title or author name.";
+      detail = mode === "saved" ? "Try a different title or author name." : cacheProgress.startsWith("Caching") ? "Still caching both weeks; results update as papers arrive." : cacheProgress.startsWith("Cache incomplete") ? "Some listings are unavailable. Search covers the cached papers." : "Try a different title or author name.";
     }
     else if (loading && total === 0) { message = "Loading papers…"; detail = "Fetching the daily listing from arXiv."; }
     else if (error && total === 0) { message = "Couldn’t load papers."; detail = "Check your connection, then try again."; }
@@ -148,7 +149,7 @@ function renderPapers(): void {
     else if (selection!.date === today()) { message = "No papers announced for this day yet."; detail = "Try refreshing later, or choose an earlier weekday."; }
     $("papers").innerHTML = `<div class="empty-state"><p>${escape(message)}</p><p class="hint">${escape(detail)}</p></div>`;
   }
-  const count = activeSearch ? `${visible.length} result${visible.length === 1 ? "" : "s"} · ${total} papers in both weeks` : `${total} paper${total === 1 ? "" : "s"}`;
+  const count = activeSearch ? `${visible.length} result${visible.length === 1 ? "" : "s"} · ${mode === "saved" ? `${total} saved paper${total === 1 ? "" : "s"}` : `${total} papers in both weeks`}` : `${total} paper${total === 1 ? "" : "s"}`;
   $("status").textContent = `${loading && !activeSearch ? "Refreshing · " : ""}${count}${cacheTime && !activeSearch ? ` · cached ${new Date(cacheTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}`;
 }
 async function loadSelection(force = false): Promise<void> {
@@ -243,7 +244,7 @@ $("papers").onclick = (event) => {
     if (index >= 0) state.bookmarks.splice(index, 1);
     else state.bookmarks.unshift({ ...paper, abstract: abstractValues.get(paper.id) ?? paper.abstract });
     persist(); renderSidebar();
-    if (mode === "saved" && !searching()) { renderPapers(); $("papers").querySelector<HTMLButtonElement>(".bookmark")?.focus(); }
+    if (mode === "saved") { renderPapers(); $("papers").querySelector<HTMLButtonElement>(".bookmark")?.focus(); }
     else {
       const saved = index < 0;
       button.classList.toggle("is-saved", saved); button.setAttribute("aria-pressed", String(saved));
@@ -300,8 +301,8 @@ document.addEventListener("keydown", (event) => {
 });
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
 function renderCacheStatus(): void {
-  $("source-label").textContent = mode === "saved" && !searching() ? "Saved on this Mac" : cacheProgress || "arXiv daily listings";
-  if (searching()) {
+  $("source-label").textContent = mode === "saved" ? "Saved on this Mac" : cacheProgress || "arXiv daily listings";
+  if (windowSearching()) {
     ($("refresh") as HTMLButtonElement).disabled = cacheProgress.startsWith("Caching");
     $("refresh").classList.toggle("loading", cacheProgress.startsWith("Caching"));
   }
@@ -341,7 +342,7 @@ function absorbFeed(feed: DayFeed, render = true): void {
   if (changed) persist();
   const selected = !loading && mode === "day" && selection?.category === feed.category && selection.date === feed.date;
   if (selected) { papers = feed.papers; cacheTime = feed.fetchedAt; error = ""; }
-  if (render && (selected || searching())) renderPapers();
+  if (render && (selected || windowSearching())) renderPapers();
 }
 async function maintainAndWarm(force = false): Promise<void> {
   if (!appReady) return;
@@ -360,7 +361,7 @@ async function maintainAndWarm(force = false): Promise<void> {
     const cached = await Promise.all(jobs.map((job) => cachedDay(job.category, job.date).catch(() => null)));
     if (generation !== warmEpoch) return;
     for (const feed of cached) if (feed) absorbFeed(feed, false);
-    if (searching()) renderPapers();
+    if (windowSearching()) renderPapers();
     for (const [index, job] of jobs.entries()) {
       if (generation !== warmEpoch) return;
       const feed = cached[index];
@@ -413,8 +414,16 @@ function checkCalendar(): void {
   const updated = weekDays()[0];
   if (updated !== currentMonday) {
     currentMonday = updated; displayedMonday = updated;
-    abstractValues.clear(); abstractErrors.clear(); expandedPapers.clear();
-    switchWeek(updated);
+    if (mode === "saved") {
+      // The reading window can roll over while an older bookmark is open.
+      // Refresh the sidebar dates without leaving or filtering saved papers.
+      ++epoch; days = weekDays(updated); selection = null; papers = [];
+      loading = false; error = ""; cacheTime = null; expandedDays.clear();
+      renderSidebar(); renderPapers();
+    } else {
+      abstractValues.clear(); abstractErrors.clear(); expandedPapers.clear();
+      switchWeek(updated);
+    }
   }
   if (lastCalendarDate !== today() || Date.now() - lastWarm >= 30 * 60 * 1000) {
     lastCalendarDate = today(); void maintainAndWarm();

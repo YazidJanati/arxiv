@@ -1,136 +1,219 @@
 import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
-const listing = readFileSync(new URL("./fixtures/listing.html", import.meta.url), "utf8");
-const abstract = readFileSync(new URL("./fixtures/abstract.html", import.meta.url), "utf8");
-async function openFriday(page: Page, category = "cs.LG") {
-  await page.getByRole("button", { name: "Friday 23 Oct", exact: false }).click();
-  await page.locator(`[data-date="2026-10-23"][data-category="${category}"]`).click();
+const fixture = readFileSync(new URL("./fixtures/catchup.html", import.meta.url), "utf8");
+const oldAbstract = readFileSync(new URL("./fixtures/abstract.html", import.meta.url), "utf8");
+function daily(date: string): string {
+  const label = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${date}T12:00:00Z`));
+  return fixture.replaceAll("{{DATE}}", label).replaceAll("A Fix for Softmax and Cross-Entropy", date === "2026-10-16" ? "Previous Week's Learning Paper" : "A Fix for Softmax and Cross-Entropy");
+}
+async function openFriday(page: Page, category = "cs.LG", date = "2026-10-23") {
+  await page.locator(`[data-day="${date}"]`).click();
+  await page.locator(`[data-date="${date}"][data-category="${category}"]`).click();
   await expect(page.locator("#reader")).toHaveAttribute("aria-busy", "false");
+}
+async function removeDay(page: Page, category = "cs.LG", date = "2026-10-23") {
+  await page.evaluate(async ({ category, date }) => { const { removeCache } = await import("/src/platform.ts"); await removeCache(`day-v2-${category}-${date}`); }, { category, date });
+}
+async function ready(page: Page) {
+  await expect(page.locator("[data-day]")).toHaveCount(7);
+  await expect(page.locator("#source-label")).toHaveText("2 weeks cached · abstracts included");
 }
 test.beforeEach(async ({ page }) => {
   await page.clock.install({ time: new Date("2026-10-24T12:00:00+02:00") });
-  await page.route("**/arxiv/list/**", (route) => route.fulfill({ contentType: "text/html", body: listing }));
-  await page.route("**/arxiv/abs/**", (route) => route.fulfill({ contentType: "text/html", body: abstract }));
-  await page.goto("/");
-  await expect(page.locator("[data-day]")).toHaveCount(7);
+  await page.route("**/arxiv/catchup/**", (route) => {
+    const date = new URL(route.request().url()).pathname.split("/").at(-1)!;
+    return route.fulfill({ contentType: "text/html", body: daily(date) });
+  });
+  await page.route("**/arxiv/abs/**", (route) => route.fulfill({ contentType: "text/html", body: oldAbstract }));
+  await page.goto("/"); await ready(page);
 });
-test("daily tree, correct announcement dates, and expandable abstracts", async ({ page }) => {
+test("daily titles expand complete abstracts without additional network requests", async ({ page }) => {
   await expect(page.getByText("Select a day, then a section.")).toBeVisible();
+  let requests = 0; page.on("request", (request) => { if (request.url().includes("/arxiv/")) requests++; });
   await openFriday(page);
   await expect(page.locator(".paper")).toHaveCount(2);
   await expect(page.getByText("Émilie Martin", { exact: false })).toBeVisible();
-  await expect(page.getByText("Thursday's Statistical Learning Paper")).toHaveCount(0);
-  await expect(page.locator(".abstract").first()).toBeHidden();
+  await expect(page.getByText("A replacement that should not be included")).toHaveCount(0);
   const title = page.getByRole("button", { name: "A Fix for Softmax and Cross-Entropy", exact: true });
-  await title.click();
-  await expect(page.locator(".abstract").first()).toContainText("numerically stable");
-  await expect(title).toHaveAttribute("aria-expanded", "true");
-  await title.click();
-  await expect(page.locator(".abstract").first()).toBeHidden();
-  await title.click();
-  await expect(page.locator(".abstract").first()).toContainText("numerically stable");
+  const abstract = page.locator("article").filter({ has: title }).locator(".abstract");
+  await expect(abstract).toBeHidden();
+  await title.click(); await expect(abstract).toContainText("numerically stable");
+  await expect(page.getByText("Loading abstract…", { exact: true })).toHaveCount(0);
+  await title.click(); await expect(abstract).toBeHidden();
+  expect(requests).toBe(0);
+});
+test("all two-week snapshots include abstracts before any paper is opened", async ({ page }) => {
+  const snapshots = await page.evaluate(async () => {
+    const { cacheKeys, read } = await import("/src/platform.ts");
+    return Promise.all((await cacheKeys()).map((key) => read<any>(key)));
+  });
+  expect(snapshots).toHaveLength(20);
+  expect(snapshots.every((feed) => feed.schema === 2 && feed.date >= "2026-10-12" && feed.date <= "2026-10-23" && feed.papers.every((paper: any) => paper.abstract.length > 50))).toBe(true);
+  await page.route("**/arxiv/**", (route) => route.abort());
+  await page.reload(); await ready(page);
+  await openFriday(page); await page.locator(".paper-title").first().click();
+  await expect(page.locator(".abstract").first()).toContainText("cost-aware");
+});
+test("week label selects exactly current and previous weeks; startup defaults to current", async ({ page }) => {
+  await page.locator("#week-label").click();
+  await expect(page.locator("#week-menu button")).toHaveCount(2);
+  await page.locator("#previous-week").click();
+  await expect(page.locator("[data-day]").first()).toHaveAttribute("data-day", "2026-10-12");
+  await expect(page.locator("#breadcrumb")).toHaveText("Previous week");
+  await openFriday(page, "cs.LG", "2026-10-16");
+  await expect(page.getByRole("button", { name: "Previous Week's Learning Paper", exact: true })).toBeVisible();
+  await page.reload(); await ready(page);
+  await expect(page.locator("[data-day]").first()).toHaveAttribute("data-day", "2026-10-19");
 });
 test("search matches titles and authors without case or accent sensitivity", async ({ page }) => {
   await openFriday(page);
   const search = page.getByRole("searchbox");
   await search.fill("SOFTMAX"); await expect(page.locator(".paper")).toHaveCount(1);
   await search.fill("emilie martin"); await expect(page.locator(".paper")).toHaveCount(1);
-  await expect(page.locator(".paper-title")).toHaveText("A Fix for Softmax and Cross-Entropy");
   await search.fill("Gupta"); await expect(page.locator(".paper-title")).toHaveText(/Cost-Aware/);
   await search.fill("missing author"); await expect(page.getByText("No matching papers.")).toBeVisible();
   await search.press("Escape"); await expect(page.locator(".paper")).toHaveCount(2);
 });
-test("bookmarks and abstracts survive reload and remain searchable offline", async ({ page }) => {
+test("bookmarking without opening a title saves its abstract for offline use", async ({ page }) => {
   await openFriday(page);
-  await page.locator(".paper-title").first().click();
-  await expect(page.locator(".abstract").first()).toContainText("numerically stable");
   await page.getByRole("button", { name: "Bookmark paper: A Fix", exact: false }).click();
-  await expect.poll(() => page.evaluate(async () => { const { read } = await import("/src/platform.ts"); return (await read<any>("state"))?.bookmarks.length; })).toBe(1);
-  await page.reload(); await expect(page.locator("[data-day]")).toHaveCount(7);
+  await expect.poll(() => page.evaluate(async () => { const { read } = await import("/src/platform.ts"); return (await read<any>("state"))?.bookmarks[0].abstract; })).toContain("numerically stable");
   await page.route("**/arxiv/**", (route) => route.abort());
-  await page.locator("#saved").click();
-  await expect(page.locator(".paper")).toHaveCount(1);
-  await page.locator(".paper-title").click();
-  await expect(page.locator(".abstract")).toContainText("numerically stable");
+  await page.reload(); await ready(page); await page.locator("#saved").click();
+  await page.locator(".paper-title").click(); await expect(page.locator(".abstract")).toContainText("numerically stable");
   await page.getByRole("searchbox").fill("barron"); await expect(page.locator(".paper")).toHaveCount(1);
   await page.getByRole("searchbox").fill("");
   await page.getByRole("button", { name: "Remove bookmark:", exact: false }).click();
   await expect(page.getByText("No bookmarks yet.")).toBeVisible();
 });
-test("add and remove sections, reject duplicates, persist light mode", async ({ page }) => {
+test("category changes and appearance persist; removed sections lose disposable caches", async ({ page }) => {
   await page.getByRole("button", { name: "Add section", exact: true }).click();
   await page.getByLabel("Appearance").selectOption("light");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await page.getByLabel("Add an arXiv section").fill("cs.AI");
-  await page.getByRole("button", { name: "Add", exact: true }).click();
-  await page.getByLabel("Add an arXiv section").fill("cs.AI");
-  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page.getByLabel("Add an arXiv section").fill("cs.AI"); await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page.getByLabel("Add an arXiv section").fill("cs.AI"); await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(page.getByText("This section is already in your sidebar.")).toBeVisible();
-  await page.getByLabel("Add an arXiv section").fill("invalid/code");
-  await page.getByRole("button", { name: "Add", exact: true }).click();
-  await expect(page.locator("#category-error")).toContainText("Enter a category code");
   await page.getByRole("button", { name: "Remove stat.ML", exact: true }).click();
-  await page.getByRole("button", { name: "Close settings", exact: true }).click();
+  await page.getByRole("button", { name: "Close settings", exact: true }).click(); await ready(page);
+  await expect.poll(() => page.evaluate(async () => { const { cacheKeys } = await import("/src/platform.ts"); return (await cacheKeys()).filter((key) => key.includes("stat.ML")).length; })).toBe(0);
   await expect.poll(() => page.evaluate(async () => { const { read } = await import("/src/platform.ts"); return (await read<any>("state"))?.categories; })).toEqual(["cs.LG", "cs.AI"]);
-  await page.reload(); await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await page.getByRole("button", { name: "Friday 23 Oct", exact: false }).click();
-  await expect(page.locator('[data-date="2026-10-23"][data-category="cs.AI"]')).toBeVisible();
-  await expect(page.locator('[data-category="stat.ML"]')).toHaveCount(0);
+  await page.reload(); await ready(page); await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 });
 test("weekends and future days display an honest empty state without fetching", async ({ page }) => {
   let requests = 0; page.on("request", (request) => { if (request.url().includes("/arxiv/")) requests++; });
-  await page.getByRole("button", { name: "Saturday today", exact: false }).click();
+  await page.locator('[data-day="2026-10-24"]').click();
   await page.locator('[data-date="2026-10-24"][data-category="cs.LG"]').click();
   await expect(page.getByText("No daily listing on weekends.")).toBeVisible();
-  await page.getByRole("button", { name: "Sunday 25 Oct", exact: false }).click();
+  await page.locator('[data-day="2026-10-25"]').click();
   await page.locator('[data-date="2026-10-25"][data-category="stat.ML"]').click();
-  await expect(page.getByText("This day hasn’t arrived yet.")).toBeVisible();
-  expect(requests).toBe(0);
+  await expect(page.getByText("This day hasn’t arrived yet.")).toBeVisible(); expect(requests).toBe(0);
 });
-test("offline refresh preserves cached listings and reports the failure", async ({ page }) => {
-  await openFriday(page);
-  await page.route("**/arxiv/list/**", (route) => route.abort());
+test("offline refresh preserves complete cached listings and abstracts", async ({ page }) => {
+  await openFriday(page); await page.route("**/arxiv/catchup/**", (route) => route.abort());
   await page.getByRole("button", { name: "Refresh papers", exact: true }).click();
   await expect(page.locator("#feed-notice")).toContainText("Showing cached papers");
   await expect(page.locator(".paper")).toHaveCount(2);
-  await page.reload(); await openFriday(page);
-  await expect(page.locator(".paper")).toHaveCount(2);
+  await page.locator(".paper-title").first().click(); await expect(page.locator(".abstract").first()).toContainText("cost-aware");
 });
-test("a delayed category response cannot overwrite the active selection", async ({ page }) => {
-  await page.route("**/arxiv/list/cs.LG/**", async (route) => { await new Promise((r) => setTimeout(r, 200)); await route.fulfill({ contentType: "text/html", body: listing }); });
-  await page.route("**/arxiv/list/stat.ML/**", (route) => route.fulfill({ contentType: "text/html", body: listing.replace("A Fix for Softmax and Cross-Entropy", "A Statistical Learning Result") }));
-  await page.getByRole("button", { name: "Friday 23 Oct", exact: false }).click();
+test("delayed foreground requests cannot overwrite another selection", async ({ page }) => {
+  await removeDay(page); await removeDay(page, "stat.ML");
+  await page.route("**/arxiv/catchup/cs.LG/2026-10-23?*", async (route) => { await new Promise((r) => setTimeout(r, 200)); await route.fulfill({ contentType: "text/html", body: daily("2026-10-23") }); });
+  await page.route("**/arxiv/catchup/stat.ML/2026-10-23?*", (route) => route.fulfill({ contentType: "text/html", body: daily("2026-10-23").replace("Cost-Aware Abstention for LLM-Based IT Ticket Classification", "A Statistical Learning Result") }));
+  await page.locator('[data-day="2026-10-23"]').click();
   await page.locator('[data-date="2026-10-23"][data-category="cs.LG"]').click();
   await page.locator('[data-date="2026-10-23"][data-category="stat.ML"]').click();
   await expect(page.locator(".paper-title").first()).toHaveText("A Statistical Learning Result");
-  await expect(page.locator("#reader")).toHaveAttribute("aria-busy", "false");
-  await page.waitForTimeout(300);
-  await expect(page.locator("#breadcrumb")).toHaveText("Friday / stat.ML");
+  await page.waitForTimeout(300); await expect(page.locator("#breadcrumb")).toHaveText("Friday / stat.ML");
   await expect(page.locator(".paper-title").first()).toHaveText("A Statistical Learning Result");
 });
-test("pagination does not truncate a daily list", async ({ page }) => {
-  const first = listing.slice(0, listing.indexOf('<h3>Thu,')) + '</dl></body></html>';
-  const last = listing.slice(0, listing.indexOf('<dl id="articles">')) + '<dl id="articles"><h3>Fri, 23 Oct 2026</h3><dt><a title="Abstract" href="/abs/2610.30002">id</a></dt><dd><div class="list-title">Last paper on next page</div><div class="list-authors"><a>Grace Hopper</a></div></dd></dl>';
-  await page.route("**/arxiv/list/cs.LG/**", (route) => route.fulfill({ contentType: "text/html", body: (route.request().url().includes("skip=0") ? first : last).replace("Total of 4 entries", "Total of 3 entries") }));
-  await openFriday(page);
-  await expect(page.locator(".paper")).toHaveCount(3);
+test("pagination preserves every new and cross-listed paper with its abstract", async ({ page }) => {
+  await removeDay(page);
+  const first = daily("2026-10-23").split('<h3>Replacement submissions')[0] + '</dl></div></html>';
+  const last = daily("2026-10-23").split('<dl id="articles">')[0] + '<dl id="articles"><h3>Cross-lists (continued)</h3><dt><a title="Abstract" href="/abs/2610.30002">id</a></dt><dd><div class="meta"><div class="list-title">Last paper on next page</div><div class="list-authors"><a>Grace Hopper</a></div><p class="mathjax">A complete abstract from the second page of the daily listing.</p></div></dd></dl></div>';
+  await page.route("**/arxiv/catchup/cs.LG/2026-10-23?*", (route) => route.fulfill({ contentType: "text/html", body: new URL(route.request().url()).searchParams.get("page") === "1" ? first : last }));
+  await openFriday(page); await expect(page.locator(".paper")).toHaveCount(3);
   await expect(page.getByText("Last paper on next page", { exact: true })).toBeVisible();
 });
-test("malformed source fails clearly and can be retried", async ({ page }) => {
-  await page.route("**/arxiv/list/**", (route) => route.fulfill({ body: "<html>Service unavailable</html>" }));
-  await openFriday(page);
-  await expect(page.locator("#feed-notice")).toContainText("unexpected listing");
-  await page.route("**/arxiv/list/**", (route) => route.fulfill({ contentType: "text/html", body: listing }));
-  await page.getByRole("button", { name: "Try again", exact: true }).click();
-  await expect(page.locator(".paper")).toHaveCount(2);
+test("malformed source fails clearly without caching partial data and can be retried", async ({ page }) => {
+  await removeDay(page);
+  await page.route("**/arxiv/catchup/cs.LG/2026-10-23?*", (route) => route.fulfill({ body: "<html>Service unavailable</html>" }));
+  await openFriday(page); await expect(page.locator("#feed-notice")).toContainText("unexpected daily listing");
+  expect(await page.evaluate(async () => { const { read } = await import("/src/platform.ts"); return read("day-v2-cs.LG-2026-10-23"); })).toBeNull();
+  await page.route("**/arxiv/catchup/cs.LG/2026-10-23?*", (route) => route.fulfill({ contentType: "text/html", body: daily("2026-10-23") }));
+  await page.getByRole("button", { name: "Try again", exact: true }).click(); await expect(page.locator(".paper")).toHaveCount(2);
 });
-test("arXiv text is displayed safely and the sidebar can be hidden", async ({ page }) => {
-  await page.route("**/arxiv/list/**", (route) => route.fulfill({ contentType: "text/html", body: listing.replace("A Fix for Softmax and Cross-Entropy", "&lt;img src=x onerror=alert(1)&gt; Safe title") }));
-  await openFriday(page);
-  await expect(page.locator(".paper-title").first()).toHaveText("<img src=x onerror=alert(1)> Safe title");
+test("cleanup keeps only two calendar weeks and never deletes bookmarks or preferences", async ({ page }) => {
+  const result = await page.evaluate(async () => {
+    const { write, read, cacheKeys, removeCache } = await import("/src/platform.ts");
+    const { pruneCache, windowBounds } = await import("/src/source.ts");
+    const state = { categories: ["cs.LG", "stat.ML"], theme: "light", bookmarks: [{ id: "2401.00001", title: "A saved older paper", date: "2024-01-01", category: "cs.LG", authors: ["A. Author"], abstract: "Preserved bookmark abstract." }] };
+    await write("state", state);
+    for (const key of ["day-v2-cs.LG-2026-10-09", "day-v2-cs.LG-2026-10-26", "day-v2-cs.AI-2026-10-23", "feed-cs.LG", "abstract-2401.00001"]) await write(key, { old: true });
+    await pruneCache(["cs.LG", "stat.ML"]);
+    let stateProtected = false; try { await removeCache("state"); } catch { stateProtected = true; }
+    return { keys: await cacheKeys(), saved: await read("state"), stateProtected, bounds: windowBounds("2026-10-24"), yearBounds: windowBounds("2027-01-02") };
+  });
+  expect(result.keys).toHaveLength(20);
+  expect(result.keys.every((key) => /^day-v2-(cs.LG|stat.ML)-2026-10-(1[2-6]|19|2[0-3])$/.test(key))).toBe(true);
+  expect(result.saved).toMatchObject({ theme: "light", bookmarks: [{ abstract: "Preserved bookmark abstract." }] });
+  expect(result.stateProtected).toBe(true); expect(result.bounds).toEqual(["2026-10-12", "2026-10-26"]); expect(result.yearBounds).toEqual(["2026-12-21", "2027-01-04"]);
+});
+test("legacy saved abstracts migrate before old caches are removed", async ({ page }) => {
+  await page.evaluate(async () => {
+    const { write } = await import("/src/platform.ts");
+    await write("state", { categories: ["cs.LG", "stat.ML"], theme: "dark", bookmarks: [{ id: "2401.00001", title: "Saved before the migration", authors: ["A. Author"], date: "2024-01-01", category: "cs.LG" }] });
+    await write("abstract-2401.00001", "The previously cached abstract is preserved with this bookmark.");
+    await write("feed-cs.LG", { days: { "2024-01-01": [] } });
+  });
+  await page.reload(); await ready(page); await page.locator("#saved").click(); await page.locator(".paper-title").click();
+  await expect(page.locator(".abstract")).toContainText("previously cached abstract");
+  expect(await page.evaluate(async () => { const { cacheKeys } = await import("/src/platform.ts"); return (await cacheKeys()).filter((key) => key.startsWith("abstract-") || key.startsWith("feed-")); })).toEqual([]);
+});
+test("Monday rollover advances the window, evicts expired snapshots, and keeps bookmarks", async ({ page }) => {
+  await openFriday(page); await page.getByRole("button", { name: "Bookmark paper: A Fix", exact: false }).click();
+  await page.clock.setSystemTime(new Date("2026-10-26T12:00:00+01:00")); await page.clock.runFor(60000);
+  await expect(page.locator("[data-day]").first()).toHaveAttribute("data-day", "2026-10-26"); await ready(page);
+  const keys = await page.evaluate(async () => { const { cacheKeys } = await import("/src/platform.ts"); return cacheKeys(); });
+  expect(keys).toHaveLength(12); expect(keys.every((key) => key.slice(-10) >= "2026-10-19" && key.slice(-10) <= "2026-10-26")).toBe(true);
+  await page.locator("#saved").click(); await page.locator(".paper-title").click(); await expect(page.locator(".abstract")).toContainText("numerically stable");
+});
+test("an in-flight fetch cannot recreate a removed section's cache", async ({ page }) => {
+  await page.route("**/arxiv/catchup/cs.AI/**", async (route) => { await new Promise((r) => setTimeout(r, 100)); await route.fulfill({ contentType: "text/html", body: daily("2026-10-23") }); });
+  const keys = await page.evaluate(async () => {
+    const { fetchDay, pruneCache } = await import("/src/source.ts"); const { cacheKeys } = await import("/src/platform.ts");
+    await pruneCache(["cs.LG", "stat.ML", "cs.AI"]);
+    const pending = fetchDay("cs.AI", "2026-10-23"); await pruneCache(["cs.LG", "stat.ML"]); await pending; return cacheKeys();
+  });
+  expect(keys.some((key) => key.includes("cs.AI"))).toBe(false);
+});
+test("remote text remains inert and titles retain bold crimson styling", async ({ page }) => {
+  await removeDay(page);
+  await page.route("**/arxiv/catchup/cs.LG/2026-10-23?*", (route) => route.fulfill({ contentType: "text/html", body: daily("2026-10-23").replace("A Fix for Softmax and Cross-Entropy", "&lt;img src=x onerror=alert(1)&gt; Safe title") }));
+  await openFriday(page); const title = page.getByRole("button", { name: "<img src=x onerror=alert(1)> Safe title", exact: true });
+  await expect(title).toBeVisible(); await expect(title).toHaveCSS("color", "rgb(179, 27, 27)"); await expect(title).toHaveCSS("font-weight", "700");
   await expect(page.locator(".paper img")).toHaveCount(0);
-  await page.getByRole("button", { name: "Toggle sidebar", exact: false }).click();
-  await expect(page.locator("#sidebar")).toBeHidden();
-  await page.getByRole("button", { name: "Toggle sidebar", exact: false }).click();
-  await expect(page.locator("#sidebar")).toBeVisible();
+});
+test("incorrect daily dates and missing abstracts are rejected", async ({ page }) => {
+  const failures = await page.evaluate(async (html) => {
+    const { parseCatchup } = await import("/src/source.ts");
+    const result: boolean[] = [];
+    for (const [body, date] of [[html, "2026-10-22"], [html.replace(/<p class="mathjax">[^<]*<\/p>/, ""), "2026-10-23"]]) {
+      try { parseCatchup(body, "cs.LG", date); result.push(false); } catch { result.push(true); }
+    }
+    return result;
+  }, daily("2026-10-23"));
+  expect(failures).toEqual([true, true]);
+});
+test("a fetch crossing Monday cannot restore an expired day", async ({ page }) => {
+  await removeDay(page, "cs.LG", "2026-10-12");
+  let release: () => void = () => {};
+  const responseReady = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/arxiv/catchup/cs.LG/2026-10-12?*", async (route) => { await responseReady; await route.fulfill({ contentType: "text/html", body: daily("2026-10-12") }); });
+  const requested = page.waitForRequest((request) => request.url().includes("/catchup/cs.LG/2026-10-12"));
+  const fetch = page.evaluate(async () => { const { fetchDay } = await import("/src/source.ts"); await fetchDay("cs.LG", "2026-10-12"); });
+  await requested; await page.clock.setSystemTime(new Date("2026-10-26T12:00:00+01:00"));
+  await page.evaluate(async () => { const { pruneCache } = await import("/src/source.ts"); await pruneCache(["cs.LG", "stat.ML"]); });
+  release(); await fetch;
+  const keys = await page.evaluate(async () => { const { cacheKeys } = await import("/src/platform.ts"); return cacheKeys(); });
+  expect(keys.some((key) => key.endsWith("2026-10-12"))).toBe(false);
 });

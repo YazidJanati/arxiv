@@ -5,6 +5,7 @@ A minimal macOS reader for daily arXiv papers, styled after [text](https://githu
 ## Reading
 
 - Open a weekday in the left sidebar, then select **cs.LG** or **stat.ML**.
+- Click the week label above the days to choose **This week** or **Previous week**. Each launch starts on the current week.
 - Read paper titles and authors. Click a title to expand or collapse its abstract.
 - Use the bookmark beside a paper to save it. **Bookmarks** collects saved papers across days and sections.
 - Search the current section or your bookmarks by title and author name. Search ignores case and accents.
@@ -12,13 +13,19 @@ A minimal macOS reader for daily arXiv papers, styled after [text](https://githu
 - Choose **Dark**, **Light**, or **System** appearance in Settings.
 - The arXiv and PDF controls beneath an abstract open the original paper in your default browser.
 
-The sidebar shows Monday through Sunday of the current local calendar week. Daily lists use **arXiv's announcement/listing dates**, not the paper's initial submission timestamp. Weekends, future dates, and days without announcements display an empty state. The week rolls over automatically. Historical week browsing and global arXiv search are outside this version's scope.
+The app keeps exactly two local calendar weeks: the current Monday–Sunday week and the preceding Monday–Sunday week. Daily lists use **arXiv's actual announcement dates**, not the paper's submission timestamp. Weekends, future dates, and days without announcements display an empty state. Global arXiv search and browsing older weeks are outside this version's scope.
 
-Lists come directly from arXiv's public category `recent` pages, including cross-listed papers. All pages needed for the current week are loaded, including categories with more than 2,000 entries. Abstracts load from each paper's arXiv abstract page when expanded. Data never passes through a third-party proxy.
+Listings and **complete abstracts arrive together** from arXiv's dated [catch-up pages](https://arxiv.org/catchup). The app includes new submissions and cross-lists, excludes replacements, and follows all required pages. It verifies each response's announcement date and rejects incomplete records rather than caching partial abstracts. No third-party proxy is used.
 
-The native app serializes arXiv requests with at least three seconds between request starts, caches listings for 30 minutes, and offers manual refresh. Cached listings remain available when arXiv or the connection fails. Cached abstracts are readable offline after you have opened them. Bookmarked titles and authors persist even if their original listing is no longer current; abstracts that have been opened are saved with the bookmark.
+On launch the app automatically downloads available weekdays in both weeks for every subscribed section. It prioritizes newer days, shows progress in the footer, and lets you open a day immediately while the rest downloads. The native app serializes requests with at least three seconds between starts. Once a daily snapshot is cached, opening a title uses the abstract already included in that snapshot—there is no separate network request or disk lookup on expansion. Bookmarks created from these snapshots include the abstract even if you never expand the paper.
 
-arXiv's HTML is parsed as text in an inert document. Paper metadata is escaped before display. The native bridge restricts network requests to category listings and paper abstracts on `https://arxiv.org`. A changed arXiv page format produces a visible error instead of a silently empty paper list.
+Final snapshots of completed announcement days are reused. Snapshots taken during their announcement day are checked again after 30 minutes or on a subsequent day, so an early empty listing does not stay empty forever. Manual refresh is also available. Offline failures preserve readable snapshots and show an incomplete-cache status; the app retries automatically during later cache checks.
+
+Expired snapshots are deleted on launch, on the first calendar check after Monday rollover, and when a section is removed. Calendar checks run every minute while the app is open and when its window receives focus. If the app stays closed across a rollover, cleanup occurs at its next launch. Both titles and abstracts live in each daily snapshot and expire together. In-flight requests cannot recreate a snapshot that has fallen outside the window or belongs to a removed section. No PDFs or remote HTML pages are saved. Native HTTP response caching is disabled.
+
+**Bookmarks are your saved collection, separate from the rolling cache.** They remain until you remove them, including older saved papers and their abstracts. During the first launch of this update, previously cached bookmark abstracts are copied into the bookmark collection before legacy cache files are deleted.
+
+arXiv's HTML is parsed as text in an inert document. Paper metadata is escaped before display. The native bridge restricts networking to arXiv's daily catch-up pages, category listings, and paper abstracts. Cleanup can remove only managed paper-cache files; it cannot delete preferences or bookmarks.
 
 ## Build and install
 
@@ -48,12 +55,11 @@ The installed app stores data under:
 ```text
 ~/Library/Application Support/arxiv-reader/
   state.json                 # categories, theme, and bookmarks
-  feed-cs.LG.json             # dated category metadata
-  feed-stat.ML.json
-  abstract-<arxiv-id>.json    # abstracts opened while reading
+  day-v2-cs.LG-YYYY-MM-DD.json    # titles, authors, and full abstracts
+  day-v2-stat.ML-YYYY-MM-DD.json
 ```
 
-Writes are atomic. Failed preference/bookmark saves show a retry notice. Quit waits for the save queue and offers to keep the app open if saving failed. Cache failures do not prevent online reading. Category caches retain up to six weeks of metadata; saved papers are stored separately. Removing a sidebar section does not remove its bookmarks. There are no accounts, telemetry, or cloud synchronization.
+Writes are atomic. Failed preference/bookmark saves show a retry notice. Quit waits for the save queue and offers to keep the app open if saving failed. Daily cache writes must succeed before their snapshots count as cached. The two default sections need at most 20 weekday snapshot files across the rolling window. The legacy `feed-*` and `abstract-*` files are removed during migration. There are no accounts, telemetry, or cloud synchronization.
 
 ## Development and checks
 
@@ -66,7 +72,7 @@ npm test               # Chromium + WebKit integration tests
 
 The browser preview uses Vite's local arXiv proxy and IndexedDB storage; native networking, request spacing, native menus, and disk storage belong to the installed app. Browser and native preferences are separate.
 
-Tests use deterministic arXiv-shaped fixtures and cover daily date grouping, title/author search, abstract toggles, persistent offline bookmarks, appearance and category settings, weekends/future days, pagination, stale-request races, offline cache fallback, malformed responses, and escaping imported text. Normal tests do not call arXiv.
+Tests use deterministic arXiv-shaped fixtures and cover complete abstract preloading, current/previous week selection, offline expansion without extra requests, bookmarks saved before expansion, migration, exact two-week eviction, year boundaries, Monday rollover, in-flight request races, pagination, missing abstracts, malformed dates, search, settings, and escaping imported text. Normal tests do not call arXiv.
 
 For a live installed-app smoke test, quit the app, then run:
 
@@ -81,7 +87,7 @@ Keyboard shortcuts: `⌘F` search, `⌘B` sidebar, `⌘R` refresh, `⌘,` settin
 ## Source layout
 
 - `src/main.ts` — reader interface and state
-- `src/source.ts` — dated listing parser, pagination, and abstract loading
+- `src/source.ts` — complete daily snapshots, two-week retention, pagination, and bookmark fallback
 - `src/platform.ts` — native messaging and browser fallback
 - `src/dates.ts` — calendar-week and announcement-date handling
 - `src/style.css` — minimal dark/light styles

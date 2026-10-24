@@ -40,12 +40,14 @@ final class ArxivNetwork {
         config.timeoutIntervalForRequest = 45
         config.timeoutIntervalForResource = 60
         config.httpMaximumConnectionsPerHost = 1
+        config.urlCache = nil
         return URLSession(configuration: config)
     }()
     func fetch(path: String, reply: @escaping Reply) {
         let listing = #"^/list/[a-z][a-z0-9-]*(?:\.[A-Z]{2})?/recent\?skip=[0-9]+&show=2000$"#
+        let catchup = #"^/catchup/[a-z][a-z0-9-]*(?:\.[A-Z]{2})?/[0-9]{4}-[0-9]{2}-[0-9]{2}\?abs=True&page=[1-9][0-9]*$"#
         let abstract = #"^/abs/(?:[0-9]{4}\.[0-9]{4,5}|[a-z-]+(?:\.[A-Z]{2})?/[0-9]{7})(?:v[0-9]+)?$"#
-        guard path.range(of: listing, options: .regularExpression) != nil || path.range(of: abstract, options: .regularExpression) != nil,
+        guard path.range(of: catchup, options: .regularExpression) != nil || path.range(of: listing, options: .regularExpression) != nil || path.range(of: abstract, options: .regularExpression) != nil,
               let url = URL(string: "https://arxiv.org" + path) else {
             reply(nil, "Unsupported arXiv request."); return
         }
@@ -98,6 +100,21 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
             case "fetch":
                 guard let path = body["path"] as? String else { reply(nil, "Missing path."); return }
                 network.fetch(path: path, reply: reply)
+            case "cacheKeys":
+                guard FileManager.default.fileExists(atPath: directory.path) else { reply([], nil); return }
+                let keys = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+                    .filter { $0.hasSuffix(".json") }
+                    .map { String($0.dropLast(5)) }
+                    .filter { $0.hasPrefix("day-v2-") || $0.hasPrefix("feed-") || $0.hasPrefix("abstract-") }
+                reply(keys, nil)
+            case "removeCache":
+                guard let key = body["key"] as? String,
+                      key.range(of: #"^(day-v2-|feed-|abstract-)[A-Za-z0-9._-]+$"#, options: .regularExpression) != nil else {
+                    reply(nil, "Only disposable paper caches can be removed."); return
+                }
+                let file = directory.appendingPathComponent(key + ".json")
+                if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
+                reply(NSNull(), nil)
             case "read", "write":
                 guard let key = body["key"] as? String, key.range(of: #"^[A-Za-z0-9._-]{1,150}$"#, options: .regularExpression) != nil else {
                     reply(nil, "Invalid storage key."); return
@@ -142,6 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("arxiv-reader", isDirectory: true)
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
+        URLCache.shared.removeAllCachedResponses()
         NSApp.setActivationPolicy(.regular)
         NSApp.appearance = NSAppearance(named: .darkAqua)
         buildMenu()

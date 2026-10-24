@@ -12,8 +12,11 @@ export interface State {
   theme: Theme;
   bookmarks: Paper[];
 }
-export interface Feed {
+export interface DayFeed {
+  schema: 2;
+  date: string;
+  category: string;
   fetchedAt: number;
-  days: Record<string, Paper[]>;
+  papers: Paper[];
 }
 export interface Selection { date: string; category: string }

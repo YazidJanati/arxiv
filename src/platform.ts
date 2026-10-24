@@ -36,6 +36,29 @@ export async function write(key: string, value: unknown): Promise<void> {
     tx.onabort = () => reject(new Error("Local save was interrupted."));
   });
 }
+const isCacheKey = (key: string) => /^(day-v2-|feed-|abstract-)[A-Za-z0-9._-]+$/.test(key);
+export async function cacheKeys(): Promise<string[]> {
+  if (desktop) return native<string[]>("cacheKeys");
+  const database = await db();
+  return new Promise((resolve, reject) => {
+    const tx = database.transaction("records", "readonly");
+    const request = tx.objectStore("records").getAllKeys();
+    request.onsuccess = () => resolve(request.result.filter((key): key is string => typeof key === "string" && isCacheKey(key)));
+    request.onerror = () => reject(new Error("Could not inspect cached papers."));
+  });
+}
+export async function removeCache(key: string): Promise<void> {
+  if (!isCacheKey(key)) throw new Error("Only disposable paper caches can be removed.");
+  if (desktop) return native<void>("removeCache", { key });
+  const database = await db();
+  return new Promise((resolve, reject) => {
+    const tx = database.transaction("records", "readwrite");
+    tx.objectStore("records").delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(new Error("Could not remove expired paper cache."));
+    tx.onabort = () => reject(new Error("Cache cleanup was interrupted."));
+  });
+}
 export async function request(path: string): Promise<string> {
   if (desktop) return native<string>("fetch", { path });
   const response = await fetch(`/arxiv${path}`, { signal: AbortSignal.timeout(45000) });

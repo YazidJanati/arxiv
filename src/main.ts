@@ -200,7 +200,9 @@ $("days").onclick = (event) => {
   if (!button) return;
   if (button.dataset.day) {
     const date = button.dataset.day;
-    if (expandedDays.has(date)) expandedDays.delete(date); else expandedDays.add(date);
+    const opening = !expandedDays.has(date);
+    expandedDays.clear();
+    if (opening) expandedDays.add(date);
     renderSidebar(); $("days").querySelector<HTMLButtonElement>(`[data-day="${date}"]`)?.focus();
   } else if (button.dataset.date && button.dataset.category) {
     selectDay(button.dataset.date, button.dataset.category);

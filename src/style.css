@@ -12,7 +12,9 @@
 #week-menu button[aria-pressed="true"]{background:var(--selected);color:var(--strong)}
 #source-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
-.result-date{display:flex;align-items:center;gap:14px;margin:28px 0 6px;font-size:10px;font-weight:400;line-height:1.8;color:var(--muted)}
+.result-date{display:flex;align-items:center;gap:14px;margin:28px 0 6px;font-size:10px;font-weight:700;line-height:1.8;color:var(--strong)}
 .result-date:first-child{margin-top:0}
 .result-date::after{content:"";flex:1;min-width:24px;border-top:1px solid var(--border)}
 .result-date+.paper{padding-top:10px}
+
+.paper.date-group-end{border-bottom:0}

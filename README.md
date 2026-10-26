@@ -20,7 +20,7 @@ A minimal macOS reader for daily arXiv papers, styled after [text](https://githu
 
 - Search by title and author across **every followed section**, from the beginning of the previous calendar week through today, independently of the selected day or displayed week. Search also works before opening a day.
 - Matches ignore case and accents; multiple search terms must all match the title/author text.
-- Search results are grouped by announcement date, newest first, with a date heading and horizontal separator above each group. This also applies when searching bookmarks from any week. Cross-listed results appear once, with all matched sections shown.
+- Search results are grouped by announcement date, newest first, with a bold date heading and a single horizontal separator above each group. This also applies when searching bookmarks from any week. Cross-listed results appear once, with all matched sections shown.
 - A reusable in-memory index and batched result rendering keep typing responsive for large collections. All matches remain searchable and more rows appear automatically as you scroll.
 - Results update as background caching completes; already cached papers remain searchable if another listing cannot download.
 - Clearing search restores the selected reading view. Switching the displayed week preserves an active query.

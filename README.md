@@ -11,7 +11,7 @@ A minimal macOS reader for daily arXiv papers, styled after [text](https://githu
 - **cs.LG** and **stat.ML** are followed by default. Add any arXiv category code through **+** or **Settings**, with common-category suggestions, duplicate checks, and a link to the official category list. Remove sections in Settings; at least one section remains.
 - Click the week label to switch between **This week** and **Previous week**. Each launch starts on the current week.
 - Lists use actual announcement dates and include new submissions and cross-lists, with pagination; replacement announcements are excluded.
-- Paper titles appear in **bold arXiv crimson (`#b31b1b`)**, with authors underneath. Click a title to expand or collapse its complete abstract inline.
+- Paper titles appear in **bold pale beige (`#ded2ae`) in dark mode** and **arXiv crimson (`#b31b1b`) in light mode**, with authors underneath. Click a title to expand or collapse its complete abstract inline.
 - The **arXiv** and **PDF** controls beneath an abstract open the original paper in your default browser. The arXiv ID is also shown.
 - Manual refresh, loading indicators, paper/result counts, cache timestamps, and retry controls for failed requests.
 - Clear empty states for weekends, future dates, unavailable announcements, no search matches, and an empty bookmark collection.
@@ -20,7 +20,7 @@ A minimal macOS reader for daily arXiv papers, styled after [text](https://githu
 
 - Search by title and author across **every followed section**, from the beginning of the previous calendar week through today, independently of the selected day or displayed week. Search also works before opening a day.
 - Matches ignore case and accents; multiple search terms must all match the title/author text.
-- Cross-listed search results appear once, with all matched sections and their announcement date, newest first.
+- Search results are grouped by announcement date, newest first, with a date heading and horizontal separator above each group. This also applies when searching bookmarks from any week. Cross-listed results appear once, with all matched sections shown.
 - A reusable in-memory index and batched result rendering keep typing responsive for large collections. All matches remain searchable and more rows appear automatically as you scroll.
 - Results update as background caching completes; already cached papers remain searchable if another listing cannot download.
 - Clearing search restores the selected reading view. Switching the displayed week preserves an active query.

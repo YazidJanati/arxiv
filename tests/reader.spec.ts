@@ -186,11 +186,11 @@ test("an in-flight fetch cannot recreate a removed section's cache", async ({ pa
   });
   expect(keys.some((key) => key.includes("cs.AI"))).toBe(false);
 });
-test("remote text remains inert and titles retain bold crimson styling", async ({ page }) => {
+test("remote text remains inert and titles retain bold styling", async ({ page }) => {
   await removeDay(page);
   await page.route("**/arxiv/catchup/cs.LG/2026-10-23?*", (route) => route.fulfill({ contentType: "text/html", body: daily("2026-10-23").replace("A Fix for Softmax and Cross-Entropy", "&lt;img src=x onerror=alert(1)&gt; Safe title") }));
   await openFriday(page); const title = page.getByRole("button", { name: "<img src=x onerror=alert(1)> Safe title", exact: true });
-  await expect(title).toBeVisible(); await expect(title).toHaveCSS("color", "rgb(179, 27, 27)"); await expect(title).toHaveCSS("font-weight", "700");
+  await expect(title).toBeVisible(); await expect(title).toHaveCSS("font-weight", "700");
   await expect(page.locator(".paper img")).toHaveCount(0);
 });
 test("incorrect daily dates and missing abstracts are rejected", async ({ page }) => {
@@ -231,7 +231,8 @@ test("search includes another section in the previous week and supports paper ac
   const search = page.getByRole("searchbox"); await search.fill("Mira Curie");
   await expect(page.locator("#breadcrumb")).toHaveText("Search / both weeks");
   await expect(page.locator(".paper-title")).toHaveText("Previous Statistics Result");
-  await expect(page.locator(".saved-meta")).toContainText("stat.ML · 14 Oct 2026");
+  await expect(page.locator(".saved-meta")).toHaveText("stat.ML");
+  await expect(page.locator(".result-date time")).toHaveAttribute("datetime", "2026-10-14");
   await page.locator(".paper-title").click(); await expect(page.locator(".abstract")).toContainText("another section in the previous week");
   await page.getByRole("button", { name: "Bookmark paper: Previous Statistics Result", exact: true }).click();
   await expect.poll(() => page.evaluate(async () => { const { read } = await import("/src/platform.ts"); return (await read<any>("state"))?.bookmarks[0]?.id; })).toBe("2610.19001");
@@ -244,13 +245,14 @@ test("search works from startup and is independent of the displayed week", async
   await page.locator("#week-label").click(); await page.locator("#previous-week").click();
   await expect(search).toHaveValue("Previous Week"); await expect(page.locator(".paper")).toHaveCount(1);
   await search.fill("softmax"); await expect(page.locator(".paper-title")).toHaveText("A Fix for Softmax and Cross-Entropy");
-  await expect(page.locator(".saved-meta")).toContainText("23 Oct 2026");
+  await expect(page.locator(".result-date time")).toHaveAttribute("datetime", "2026-10-23");
   await search.fill(""); await expect(page.locator("#breadcrumb")).toHaveText("Previous week");
 });
 test("cross-listed search results are deduplicated with all sections shown", async ({ page }) => {
   await page.getByRole("searchbox").fill("cost-aware");
   await expect(page.locator(".paper")).toHaveCount(1);
-  await expect(page.locator(".saved-meta")).toHaveText("cs.LG, stat.ML · 23 Oct 2026");
+  await expect(page.locator(".saved-meta")).toHaveText("cs.LG, stat.ML");
+  await expect(page.locator(".result-date time")).toHaveAttribute("datetime", "2026-10-23");
 });
 test("older bookmarks remain searchable without affecting the main two-week search", async ({ page }) => {
   await page.evaluate(async () => {
@@ -319,10 +321,12 @@ test("large cached searches leave input events light and reveal every match in s
     const { write } = await import("/src/platform.ts");
     const papers = Array.from({ length: 4000 }, (_, i) => ({
       id: `2610.${String(i).padStart(5, "0")}`, title: `Batch candidate ${i === 0 ? "targetzero" : i}`,
-      authors: ["Émilie Researcher"], category: "cs.LG", date: "2026-10-23",
+      authors: ["Émilie Researcher"], category: "cs.LG", date: i >= 3939 ? "2026-10-23" : "2026-10-22",
       abstract: `Complete abstract for candidate ${i}. `.repeat(50),
     }));
-    await write("day-v2-cs.LG-2026-10-23", { schema: 2, category: "cs.LG", date: "2026-10-23", fetchedAt: Date.now(), papers });
+    for (const date of ["2026-10-23", "2026-10-22"]) {
+      await write(`day-v2-cs.LG-${date}`, { schema: 2, category: "cs.LG", date, fetchedAt: Date.now(), papers: papers.filter((paper) => paper.date === date) });
+    }
   });
   await page.reload(); await ready(page);
   // Observe the input event itself: rendering must happen after it returns,
@@ -339,9 +343,11 @@ test("large cached searches leave input events light and reveal every match in s
   expect(mutations).toBe(0);
   await expect(page.locator("#status")).toContainText("4000 results");
   await expect(page.locator(".paper")).toHaveCount(60);
+  await expect(page.locator(".result-date")).toHaveText(["Friday, 23 October 2026"]);
   await expect(page.locator(".paper-title").first()).toHaveText("Batch candidate 3999");
   await page.locator(".paper-title").last().scrollIntoViewIfNeeded();
   await expect(page.locator(".paper")).toHaveCount(120);
+  await expect(page.locator(".result-date")).toHaveText(["Friday, 23 October 2026", "Thursday, 22 October 2026"]);
   await page.locator(".paper-title").nth(70).click();
   await expect(page.locator(".abstract").nth(70)).toBeVisible();
   await expect(page.locator(".abstract").nth(70)).toContainText("Complete abstract for candidate 3929");
@@ -353,4 +359,54 @@ test("large cached searches leave input events light and reveal every match in s
   await search.fill("emilie researcher"); await expect(page.locator(".paper-title")).toHaveText("Batch candidate targetzero");
   await search.fill("missing"); await search.press("Escape");
   await expect(search).toHaveValue(""); await expect(page.locator(".paper-title")).toHaveText("Batch candidate targetzero");
+});
+
+
+test("search groups announcement dates newest first and clearing restores the day", async ({ page }) => {
+  await openFriday(page);
+  await expect(page.locator(".result-date")).toHaveCount(0);
+  await page.getByRole("searchbox").fill("Emilie Martin");
+  await expect(page.locator(".result-date")).toHaveText(["Friday, 23 October 2026", "Friday, 16 October 2026"]);
+  await expect(page.locator("#papers > .result-date + .paper")).toHaveCount(2);
+  expect(await page.locator(".result-date time").evaluateAll((times) => times.map((time) => time.getAttribute("datetime")))).toEqual(["2026-10-23", "2026-10-16"]);
+  await page.getByRole("searchbox").press("Escape");
+  await expect(page.locator(".result-date")).toHaveCount(0);
+  await expect(page.locator("#breadcrumb")).toHaveText("Friday / cs.LG");
+});
+
+test("bookmark search groups all saved dates and legacy abstract labels remain correct", async ({ page }) => {
+  await page.evaluate(async () => {
+    const { write } = await import("/src/platform.ts");
+    await write("state", { categories: ["cs.LG", "stat.ML"], theme: "dark", bookmarks: [
+      { id: "2401.00001", title: "Group old legacy", authors: ["Grouping Author"], date: "2024-01-03", category: "cs.RO" },
+      { id: "2606.00001", title: "Group recent", authors: ["Grouping Author"], date: "2026-06-01", category: "math.OC", abstract: "A recent saved abstract." },
+      { id: "2401.00002", title: "Group old complete", authors: ["Grouping Author"], date: "2024-01-03", category: "cs.RO", abstract: "An older saved abstract." },
+    ] });
+  });
+  await page.reload(); await ready(page); await page.locator("#saved").click();
+  await page.getByRole("searchbox").fill("Grouping Author");
+  await expect(page.locator(".paper-title")).toHaveText(["Group recent", "Group old complete", "Group old legacy"]);
+  await expect(page.locator(".result-date")).toHaveText(["Monday, 1 June 2026", "Wednesday, 3 January 2024"]);
+  await page.getByRole("button", { name: "Group old legacy", exact: true }).click();
+  const region = page.getByRole("region", { name: "Group old legacy", exact: true });
+  await expect(region).toBeVisible();
+  await expect(region).not.toContainText("Loading abstract…");
+  await expect(region).toContainText("softmax");
+  await page.getByRole("searchbox").press("Escape");
+  await expect(page.locator(".result-date")).toHaveCount(0);
+  await expect(page.locator(".paper-title")).toHaveText(["Group old legacy", "Group recent", "Group old complete"]);
+});
+
+test("titles are pale beige in dark mode and crimson in light mode including system appearance", async ({ page }) => {
+  await openFriday(page);
+  const title = page.locator(".paper-title").first();
+  await expect(title).toHaveCSS("color", "rgb(222, 210, 174)");
+  await page.locator("#settings").click();
+  await page.getByLabel("Appearance").selectOption("light");
+  await expect(title).toHaveCSS("color", "rgb(179, 27, 27)");
+  await page.getByLabel("Appearance").selectOption("system");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(title).toHaveCSS("color", "rgb(222, 210, 174)");
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect(title).toHaveCSS("color", "rgb(179, 27, 27)");
 });

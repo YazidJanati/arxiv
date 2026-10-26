@@ -113,7 +113,7 @@ function visiblePapers(): Paper[] {
   const all = viewPapers();
   const terms = normalize(query).split(/\s+/).filter(Boolean);
   if (!terms.length) return all;
-  return all.filter((paper) => {
+  const matches = all.filter((paper) => {
     let haystack = searchText.get(paper);
     if (haystack === undefined) {
       haystack = normalize(`${paper.title} ${paper.authors.join(" ")}`);
@@ -121,13 +121,16 @@ function visiblePapers(): Paper[] {
     }
     return terms.every((term) => haystack.includes(term));
   });
+  // Saved papers keep their saved order until searched; date groups then need
+  // the same newest-first ordering as the two-week reading window.
+  return mode === "saved" ? matches.sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)) : matches;
 }
 function paperMarkup(paper: Paper, index: number): string {
   const open = expandedPapers.has(paper.id), saved = state.bookmarks.some((p) => p.id === paper.id);
   const abstract = abstractValues.get(paper.id) ?? paper.abstract;
   const abstractError = abstractErrors.get(paper.id);
   const categories = (paper as Partial<SearchPaper>).categories ?? [paper.category];
-  return `<article class="paper" data-paper="${escape(paper.id)}"><div class="paper-top"><div class="paper-text"><button class="paper-title" data-action="toggle" aria-expanded="${open}" aria-controls="abstract-${index}" id="title-${index}">${escape(paper.title)}</button><p class="authors">${escape(paper.authors.join(", "))}</p>${mode === "saved" || searching() ? `<p class="saved-meta">${escape(categories.join(", "))} · ${formatDate(paper.date, { day: "numeric", month: "short", year: "numeric" })}</p>` : ""}</div><button class="icon-button bookmark ${saved ? "is-saved" : ""}" data-action="bookmark" aria-label="${saved ? "Remove bookmark" : "Bookmark paper"}: ${escape(paper.title)}" aria-pressed="${saved}" title="${saved ? "Remove bookmark" : "Bookmark paper"}">${icon("bookmark")}</button></div>
+  return `<article class="paper" data-paper="${escape(paper.id)}"><div class="paper-top"><div class="paper-text"><button class="paper-title" data-action="toggle" aria-expanded="${open}" aria-controls="abstract-${index}" id="title-${index}">${escape(paper.title)}</button><p class="authors">${escape(paper.authors.join(", "))}</p>${mode === "saved" || searching() ? `<p class="saved-meta">${escape(categories.join(", "))}${searching() ? "" : ` · ${formatDate(paper.date, { day: "numeric", month: "short", year: "numeric" })}`}</p>` : ""}</div><button class="icon-button bookmark ${saved ? "is-saved" : ""}" data-action="bookmark" aria-label="${saved ? "Remove bookmark" : "Bookmark paper"}: ${escape(paper.title)}" aria-pressed="${saved}" title="${saved ? "Remove bookmark" : "Bookmark paper"}">${icon("bookmark")}</button></div>
   <div class="abstract" id="abstract-${index}" role="region" aria-labelledby="title-${index}" ${open ? "" : "hidden"}>${abstract ? `<p>${escape(abstract)}</p>` : abstractError ? `<p class="abstract-error">${escape(abstractError)} <button data-action="retry-abstract">Try again</button></p>` : '<p class="hint" role="status">Loading abstract…</p>'}<div class="paper-links"><button data-action="open">arXiv ${icon("external")}</button><button data-action="pdf">PDF ${icon("external")}</button><span>${escape(paper.id)}</span></div></div></article>`;
 }
 // Keep the initial render small even when a one-letter search matches thousands
@@ -141,7 +144,14 @@ const resultObserver = new IntersectionObserver((entries) => {
 function appendResults(batchSize = resultBatchSize): void {
   const start = renderedCount;
   renderedCount = Math.min(start + batchSize, resultPapers.length);
-  morePapers.insertAdjacentHTML("beforebegin", resultPapers.slice(start, renderedCount).map((paper, i) => paperMarkup(paper, start + i)).join(""));
+  morePapers.insertAdjacentHTML("beforebegin", resultPapers.slice(start, renderedCount).map((paper, i) => {
+    const index = start + i;
+    // Compare with the previous result across batch boundaries, so scrolling
+    // neither repeats a date heading nor misses the start of a new date.
+    const heading = searching() && (index === 0 || resultPapers[index - 1].date !== paper.date)
+      ? `<h2 class="result-date"><time datetime="${escape(paper.date)}">${escape(formatDate(paper.date, { weekday: "long", day: "numeric", month: "long", year: "numeric" }))}</time></h2>` : "";
+    return heading + paperMarkup(paper, index);
+  }).join(""));
   if (renderedCount === resultPapers.length) { resultObserver.disconnect(); morePapers.remove(); }
   else {
     // Re-observe after moving the sentinel to catch a batch that still fits
@@ -243,7 +253,7 @@ async function loadAbstract(paper: Paper): Promise<void> {
     // Update just the abstract so keyboard focus and reading position survive.
     const article = Array.from($("papers").querySelectorAll<HTMLElement>("article")).find((a) => a.dataset.paper === paper.id);
     if (article) {
-      const index = Array.from($("papers").children).indexOf(article);
+      const index = Array.from($("papers").querySelectorAll<HTMLElement>("article")).indexOf(article);
       const holder = document.createElement("div"); holder.innerHTML = paperMarkup(paper, index);
       article.querySelector(".abstract")!.replaceWith(holder.querySelector(".abstract")!);
     }

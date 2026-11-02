@@ -410,3 +410,42 @@ test("titles are pale beige in dark mode and crimson in light mode including sys
   await page.emulateMedia({ colorScheme: "light" });
   await expect(title).toHaveCSS("color", "rgb(179, 27, 27)");
 });
+
+
+test("a completed day's empty snapshot is retried automatically instead of becoming final", async ({ page }) => {
+  await page.evaluate(async () => {
+    const { write } = await import("/src/platform.ts");
+    await write("day-v2-cs.LG-2026-10-23", { schema: 2, category: "cs.LG", date: "2026-10-23", fetchedAt: Date.now(), papers: [] });
+  });
+  let requests = 0;
+  page.on("request", (request) => { if (request.url().includes("/catchup/cs.LG/2026-10-23")) requests++; });
+  await page.reload(); await ready(page); await openFriday(page);
+  await expect(page.locator(".paper")).toHaveCount(0);
+  expect(requests).toBe(0);
+  // Allow the first minute-boundary check after the five-minute expiry.
+  await page.clock.runFor(6 * 60 * 1000);
+  await expect(page.locator(".paper")).toHaveCount(2);
+  expect(requests).toBe(1);
+  await page.locator(".paper-title").first().click();
+  await expect(page.locator(".abstract").first()).toContainText("cost-aware");
+  await page.clock.runFor(5 * 60 * 1000);
+  expect(requests).toBe(1); // Populated completed days are reused again.
+});
+
+test("today's empty listing recovers on the next five-minute cache check", async ({ page }) => {
+  await page.clock.setSystemTime(new Date("2026-10-26T12:00:00+01:00"));
+  await page.evaluate(async () => {
+    const { write } = await import("/src/platform.ts");
+    await write("day-v2-cs.LG-2026-10-26", { schema: 2, category: "cs.LG", date: "2026-10-26", fetchedAt: Date.now(), papers: [] });
+  });
+  await page.reload(); await ready(page); await openFriday(page, "cs.LG", "2026-10-26");
+  await expect(page.getByText("No papers announced for this day yet.")).toBeVisible();
+  // Allow the first minute-boundary check after the five-minute expiry.
+  await page.clock.runFor(6 * 60 * 1000);
+  await expect(page.locator(".paper")).toHaveCount(2);
+  const snapshot = await page.evaluate(async () => {
+    const { read } = await import("/src/platform.ts");
+    return read<any>("day-v2-cs.LG-2026-10-26");
+  });
+  expect(snapshot.papers.every((paper: any) => paper.abstract.length > 50)).toBe(true);
+});

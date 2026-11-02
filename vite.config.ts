@@ -9,7 +9,7 @@ export default defineConfig({
         target: "https://arxiv.org",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/arxiv/, ""),
-        headers: { "User-Agent": "arxiv-reader/0.1 (personal desktop reader; https://github.com/YazidJanati/arxiv)" },
+        headers: { "User-Agent": "arxiv-reader/0.1 (personal desktop reader; https://github.com/YazidJanati/arxiv)", "Accept-Encoding": "identity" },
       },
     },
   },

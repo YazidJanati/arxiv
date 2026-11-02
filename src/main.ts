@@ -2,7 +2,7 @@ import "./style.css";
 import { windowPapers, type SearchPaper } from "./search";
 import { icon } from "./icons";
 import { formatDate, isWeekend, offsetDate, today, weekDays } from "./dates";
-import { cachedDay, fetchAbstract, fetchDay, fresh, inWindow, pruneCache, validCategory, windowDates } from "./source";
+import { cachedDay, emptyRetryInterval, fetchAbstract, fetchDay, fresh, inWindow, pruneCache, validCategory, windowDates } from "./source";
 import { desktop, openExternal, read, setAppearance, write } from "./platform";
 import type { DayFeed, Paper, Selection, State, Theme } from "./types";
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -495,7 +495,8 @@ function checkCalendar(): void {
       switchWeek(updated);
     }
   }
-  if (lastCalendarDate !== today() || Date.now() - lastWarm >= 30 * 60 * 1000) {
+  const retryInterval = [...windowFeeds.values()].some((feed) => !feed.papers.length) ? emptyRetryInterval : 30 * 60 * 1000;
+  if (lastCalendarDate !== today() || Date.now() - lastWarm >= retryInterval) {
     lastCalendarDate = today(); void maintainAndWarm();
   }
   renderSidebar();

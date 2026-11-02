@@ -65,6 +65,11 @@ final class ArxivNetwork {
             var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
             request.setValue("arxiv-reader/0.1 (personal desktop reader; https://github.com/YazidJanati/arxiv)", forHTTPHeaderField: "User-Agent")
             request.setValue("text/html", forHTTPHeaderField: "Accept")
+            // arXiv's gzip CDN variant can retain a pre-announcement empty
+            // catch-up page after the identity variant contains the papers.
+            if url.path.hasPrefix("/catchup/") {
+                request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+            }
             session.dataTask(with: request) { [self] data, response, error in
                 DispatchQueue.main.async { [self] in
                     defer { busy = false; drain() }

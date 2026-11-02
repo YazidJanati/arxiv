@@ -90,9 +90,13 @@ export async function cachedDay(category: string, date: string): Promise<DayFeed
   if (!feed || feed.schema !== 2 || feed.category !== category || feed.date !== date || !Array.isArray(feed.papers) || !feed.papers.every((paper) => paper.date === date && paper.category === category && validId(paper.id) && typeof paper.title === "string" && Array.isArray(paper.authors) && paper.authors.every((author) => typeof author === "string") && typeof paper.abstract === "string" && paper.abstract.length > 0)) return null;
   return feed;
 }
+export const emptyRetryInterval = 5 * 60 * 1000;
 export function fresh(feed: DayFeed): boolean {
-  // A snapshot taken after its announcement day is final. Today's empty or
-  // still-changing snapshot must be revisited, including after midnight.
+  // Empty CDN responses can predate publication, even for a completed day.
+  // Never promote an empty snapshot to a permanently final listing.
+  if (!feed.papers.length) return Date.now() - feed.fetchedAt < emptyRetryInterval;
+  // A nonempty snapshot taken after its announcement day is final. Listings
+  // captured during that day must be revisited, including after midnight.
   return feed.fetchedAt >= Date.parse(`${offsetDate(feed.date, 1)}T00:00:00Z`) || Date.now() - feed.fetchedAt < 30 * 60 * 1000;
 }
 const pendingDays = new Map<string, Promise<DayFeed>>();

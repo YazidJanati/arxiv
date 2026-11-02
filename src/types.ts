@@ -17,6 +17,7 @@ export interface DayFeed {
   date: string;
   category: string;
   fetchedAt: number;
+  source?: "new" | "catchup";
   papers: Paper[];
 }
 export interface Selection { date: string; category: string }

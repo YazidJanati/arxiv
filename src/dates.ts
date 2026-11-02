@@ -24,8 +24,8 @@ export function formatDate(iso: string, options: Intl.DateTimeFormatOptions): st
 }
 export const isWeekend = (iso: string) => [0, 6].includes(dateObject(iso).getUTCDay());
 export function listingDate(text: string): string | null {
-  const match = text.match(/\b(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})\b/);
+  const match = text.match(/\b(\d{1,2})\s+(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{4})\b/);
   if (!match) return null;
-  const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].indexOf(match[2]) + 1;
+  const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].indexOf(match[2].slice(0, 3)) + 1;
   return `${match[3]}-${String(month).padStart(2, "0")}-${match[1].padStart(2, "0")}`;
 }

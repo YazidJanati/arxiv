@@ -44,7 +44,7 @@ final class ArxivNetwork {
         return URLSession(configuration: config)
     }()
     func fetch(path: String, reply: @escaping Reply) {
-        let listing = #"^/list/[a-z][a-z0-9-]*(?:\.[A-Z]{2})?/recent\?skip=[0-9]+&show=2000$"#
+        let listing = #"^/list/[a-z][a-z0-9-]*(?:\.[A-Z]{2})?/(?:new|recent)\?skip=[0-9]+&show=2000$"#
         let catchup = #"^/catchup/[a-z][a-z0-9-]*(?:\.[A-Z]{2})?/[0-9]{4}-[0-9]{2}-[0-9]{2}\?abs=True&page=[1-9][0-9]*$"#
         let abstract = #"^/abs/(?:[0-9]{4}\.[0-9]{4,5}|[a-z-]+(?:\.[A-Z]{2})?/[0-9]{7})(?:v[0-9]+)?$"#
         guard path.range(of: catchup, options: .regularExpression) != nil || path.range(of: listing, options: .regularExpression) != nil || path.range(of: abstract, options: .regularExpression) != nil,
@@ -67,7 +67,7 @@ final class ArxivNetwork {
             request.setValue("text/html", forHTTPHeaderField: "Accept")
             // arXiv's gzip CDN variant can retain a pre-announcement empty
             // catch-up page after the identity variant contains the papers.
-            if url.path.hasPrefix("/catchup/") {
+            if url.path.hasPrefix("/catchup/") || url.path.hasSuffix("/new") {
                 request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
             }
             session.dataTask(with: request) { [self] data, response, error in

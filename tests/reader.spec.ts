@@ -6,6 +6,10 @@ function daily(date: string): string {
   const label = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${date}T12:00:00Z`));
   return fixture.replaceAll("{{DATE}}", label).replaceAll("2610.31642", date === "2026-10-16" ? "2610.20642" : "2610.31642").replaceAll("A Fix for Softmax and Cross-Entropy", date === "2026-10-16" ? "Previous Week's Learning Paper" : "A Fix for Softmax and Cross-Entropy");
 }
+function latest(date: string): string {
+  const label = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${date}T12:00:00Z`));
+  return daily(date).replace(/<h1>.*?<\/h1>/, `<h1>Machine Learning</h1><h3>Showing new listings for ${label}</h3>`);
+}
 async function openFriday(page: Page, category = "cs.LG", date = "2026-10-23") {
   await page.locator(`[data-day="${date}"]`).click();
   await page.locator(`[data-date="${date}"][data-category="${category}"]`).click();
@@ -23,6 +27,13 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/arxiv/catchup/**", (route) => {
     const date = new URL(route.request().url()).pathname.split("/").at(-1)!;
     return route.fulfill({ contentType: "text/html", body: daily(date) });
+  });
+  await page.route("**/arxiv/list/**/new?*", async (route) => {
+    const date = await page.evaluate(() => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    });
+    return route.fulfill({ contentType: "text/html", body: latest(date) });
   });
   await page.route("**/arxiv/abs/**", (route) => route.fulfill({ contentType: "text/html", body: oldAbstract }));
   await page.goto("/"); await ready(page);
@@ -448,4 +459,37 @@ test("today's empty listing recovers on the next five-minute cache check", async
     return read<any>("day-v2-cs.LG-2026-10-26");
   });
   expect(snapshot.papers.every((paper: any) => paper.abstract.length > 50)).toBe(true);
+});
+
+
+test("today replaces a partial catch-up snapshot with every canonical page and excludes replacements", async ({ page }) => {
+  await page.clock.setSystemTime(new Date("2026-10-26T12:00:00+01:00"));
+  await page.evaluate(async () => {
+    const { write } = await import("/src/platform.ts");
+    await write("day-v2-cs.LG-2026-10-26", { schema: 2, category: "cs.LG", date: "2026-10-26", fetchedAt: Date.now(), papers: [{ id: "2610.31642", title: "Partial cached paper", authors: ["A. Author"], category: "cs.LG", date: "2026-10-26", abstract: "A cached abstract." }] });
+  });
+  const first = latest("2026-10-26").split('<h3>Replacement submissions')[0] + '</dl></div></html>';
+  const last = latest("2026-10-26").replace(/<dl id="articles">[\s\S]*?Cross submissions/, '<dl id="articles"><h3>Cross submissions').replace(/<h3>Cross submissions[\s\S]*?(?=<dl id="articles"><h3>Replacement submissions)/, '');
+  const offsets: number[] = [];
+  await page.route("**/arxiv/list/cs.LG/new?*", (route) => {
+    const skip = Number(new URL(route.request().url()).searchParams.get("skip")); offsets.push(skip);
+    return route.fulfill({ contentType: "text/html", body: skip === 0 ? first : last });
+  });
+  await page.reload(); await ready(page); await openFriday(page, "cs.LG", "2026-10-26");
+  await expect(page.locator(".paper")).toHaveCount(2);
+  await expect(page.getByText("Partial cached paper")).toHaveCount(0);
+  expect(offsets).toEqual([0, 2]);
+  await expect(page.getByText("A replacement that should not be included")).toHaveCount(0);
+  const feed = await page.evaluate(async () => { const { read } = await import("/src/platform.ts"); return read<any>("day-v2-cs.LG-2026-10-26"); });
+  expect(feed.source).toBe("new");
+  expect(feed.papers.every((paper: any) => paper.abstract.length > 50 && paper.date === "2026-10-26")).toBe(true);
+});
+
+test("a previous announcement on the new page is never relabeled as today", async ({ page }) => {
+  await page.clock.setSystemTime(new Date("2026-10-26T05:00:00+01:00"));
+  await page.route("**/arxiv/list/cs.LG/new?*", (route) => route.fulfill({ contentType: "text/html", body: latest("2026-10-23") }));
+  await page.route("**/arxiv/catchup/cs.LG/2026-10-26?*", (route) => route.fulfill({ contentType: "text/html", body: '<div id="dlpage"><h1>Catchup results for Machine Learning on Mon, 26 Oct 2026</h1><div>Total of 0 entries</div></div>' }));
+  await page.reload(); await ready(page); await openFriday(page, "cs.LG", "2026-10-26");
+  await expect(page.getByText("No papers announced for this day yet.")).toBeVisible();
+  await expect(page.locator(".paper")).toHaveCount(0);
 });

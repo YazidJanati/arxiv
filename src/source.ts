@@ -21,13 +21,18 @@ export function windowDates(): string[] {
   }
   return result.reverse();
 }
-export function parseCatchup(html: string, category: string, date: string): { papers: DayFeed["papers"]; count: number; total: number } {
+class AnnouncementDateMismatch extends Error {}
+export function parseCatchup(html: string, category: string, date: string) {
+  return parseListing(html, category, date, "catchup");
+}
+function parseListing(html: string, category: string, date: string, source: "new" | "catchup"): { papers: DayFeed["papers"]; count: number; total: number } {
   const doc = new DOMParser().parseFromString(html, "text/html");
   const container = doc.querySelector("#dlpage");
   const totalMatch = container?.textContent?.match(/Total of\s+([\d,]+)\s+entries/);
-  if (!totalMatch || listingDate(container?.querySelector("h1")?.textContent ?? "") !== date) {
-    throw new Error("arXiv returned an unexpected daily listing. Please try again later.");
-  }
+  const heading = source === "catchup" ? container?.querySelector("h1") : Array.from(container?.querySelectorAll("h3") ?? []).find((h) => /Showing new listings for/.test(h.textContent ?? ""));
+  const announcedDate = listingDate(heading?.textContent ?? "");
+  if (!totalMatch || !announcedDate) throw new Error("arXiv returned an unexpected daily listing. Please try again later.");
+  if (announcedDate !== date) throw new AnnouncementDateMismatch("arXiv returned an unexpected daily listing. Please try again later.");
   const total = Number(totalMatch[1].replace(/,/g, ""));
   // arXiv emits a separate dl with the same id for each announcement type.
   const articles = Array.from(container?.querySelectorAll("dl#articles") ?? []);
@@ -95,6 +100,8 @@ export function fresh(feed: DayFeed): boolean {
   // Empty CDN responses can predate publication, even for a completed day.
   // Never promote an empty snapshot to a permanently final listing.
   if (!feed.papers.length) return Date.now() - feed.fetchedAt < emptyRetryInterval;
+  // Replace today's older catch-up snapshots with the complete canonical list.
+  if (feed.date === today() && feed.source !== "new") return false;
   // A nonempty snapshot taken after its announcement day is final. Listings
   // captured during that day must be revisited, including after midnight.
   return feed.fetchedAt >= Date.parse(`${offsetDate(feed.date, 1)}T00:00:00Z`) || Date.now() - feed.fetchedAt < 30 * 60 * 1000;
@@ -107,15 +114,24 @@ export function fetchDay(category: string, date: string): Promise<DayFeed> {
   const promise = (async () => {
     const papers = new Map<string, DayFeed["papers"][number]>();
     let pageNumber = 1, received = 0;
+    let source: "new" | "catchup" = date === today() ? "new" : "catchup";
     while (true) {
-      const page = parseCatchup(await request(`/catchup/${category}/${date}?abs=True&page=${pageNumber}`), category, date);
+      const path = source === "new" ? `/list/${category}/new?skip=${received}&show=2000` : `/catchup/${category}/${date}?abs=True&page=${pageNumber}`;
+      let page: ReturnType<typeof parseListing>;
+      try { page = parseListing(await request(path), category, date, source); }
+      catch (cause) {
+        // Before publication, /new still belongs to the preceding announcement
+        // day. Never label those papers as today: use the exact dated endpoint.
+        if (source === "new" && pageNumber === 1 && cause instanceof AnnouncementDateMismatch) { source = "catchup"; continue; }
+        throw cause;
+      }
       for (const paper of page.papers) papers.set(paper.id, paper);
       received += page.count;
       if (received >= page.total) break;
       if (page.count === 0 || pageNumber >= 100) throw new Error("arXiv did not return the complete daily listing. Please refresh later.");
       pageNumber++;
     }
-    const feed: DayFeed = { schema: 2, date, category, fetchedAt: Date.now(), papers: [...papers.values()].sort((a, b) => b.id.localeCompare(a.id)) };
+    const feed: DayFeed = { schema: 2, date, category, source, fetchedAt: Date.now(), papers: [...papers.values()].sort((a, b) => b.id.localeCompare(a.id)) };
     await mutate(async () => {
       // Recheck after the request: the calendar may have rolled over, or the
       // section may have been removed while it was in flight.

@@ -22,10 +22,13 @@ A minimal macOS reader for daily arXiv papers, styled after [text](https://githu
 - **Settings → Research profile** is an editable instruction profile. It starts with Yazid’s methodological interests in Monte Carlo, continuous/discrete diffusion, flow matching, autoregressive models, efficient sampling and speculative decoding, with explicit encouragement to discover novel nearby ideas such as UniformRace.
 - Recommendations use **titles, authors and complete abstracts only**. They do not fetch or read PDFs or full text.
 - No keyword prefilter or fixed recommendation count: every complete abstract is reviewed in bounded, sequential batches. Results distinguish direct connections from nearby ideas and explain the connection using the abstract. An empty result is valid.
-- Reviews run automatically while the app is open after all of a day’s subscribed listings are available. Missed retained days catch up on launch, newest first. Refresh retries a failed review. Automatic recommendations can be paused in Settings.
+- **Manual reviews only:** click **Review day** directly in a day’s **For you** view. Startup, opening another day, Refresh, and profile/model changes never trigger paid inference. **Stop review** cancels the active worker.
 - Uses the official **Codex CLI** signed in with your **ChatGPT account**, sharing its plan limits. The app detects Homebrew Codex or the bundled CLI in `/Applications/Codex.app`. **Connect ChatGPT** starts the official browser login when needed; the reader does not read or copy login tokens and does not use API-key billing.
 - Your profile, titles, authors and complete abstracts are sent to OpenAI for the review. This does not import ChatGPT conversations or memory. Codex runs ephemerally with user configuration, plugins, shell, browsing, computer-use and subagent tools disabled, in a read-only sandbox. The reader’s own network bridge remains restricted to arXiv.
-- Successful complete reviews are saved locally and reused offline, including when signed out. Profile, subscription or paper-content changes invalidate old results. Failed refreshes preserve matching saved results; partial model results and unknown paper IDs are never published.
+- **GPT-6.1 Terra** is the default, explicitly pinned for every request. Choose another available model in Settings; changing models does not discard paid-for results.
+- Settings includes a **daily batch limit**, default **5** (up to 30 abstracts per batch). The native worker reserves each attempted request on disk before execution, enforcing the cap across restarts and counting interrupted/failed attempts.
+- Before review, the day view shows unreviewed abstracts, remaining batches, the chosen model, and an approximate input-token estimate. The estimate excludes output tokens and model overhead; it is not a credit or price quote. Reported input/output token usage is tracked for new requests from this version.
+- Every completed batch is saved before another model request starts, including papers with no match. Interrupted reviews resume only unreviewed or changed abstracts. Cache identity ignores JSON object key ordering and cross-list labels. Unknown IDs and malformed responses are rejected. Profile changes require an explicit new review. Saved results remain readable offline, including when signed out.
 - Recommendation snapshots expire with the same two-calendar-week window as daily papers. Profile/preferences and bookmarks remain separate and are preserved.
 
 ### Search
@@ -113,7 +116,8 @@ The installed app stores data under:
   state.json                 # categories, theme, and bookmarks
   day-v2-cs.LG-YYYY-MM-DD.json    # titles, authors, and full abstracts
   day-v2-stat.ML-YYYY-MM-DD.json
-  recommendations-v1-YYYY-MM-DD.json  # exact review inputs and selected IDs/reasons
+  recommendations-v1-YYYY-MM-DD.json  # per-paper assessments, including rejected papers
+  recommendation-usage.json          # daily request count and reported token usage
 ```
 
 Writes are atomic. Failed preference/bookmark saves show a retry notice. Quit waits for the save queue and offers to keep the app open if saving failed. Daily cache writes must succeed before their snapshots count as cached. The two default sections need at most 20 weekday snapshot files across the rolling window. The legacy `feed-*` and `abstract-*` files are removed during migration. There is no telemetry or cloud synchronization. Recommendations optionally use your ChatGPT account through Codex.
@@ -125,6 +129,7 @@ npm run dev            # browser preview at http://127.0.0.1:1421
 npm run build          # strict TypeScript check + production build
 npx playwright install chromium webkit
 npm test               # Chromium + WebKit integration tests
+npm run test:native    # native model/budget/cancellation tests using a fake CLI
 ```
 
 The browser preview uses Vite's local arXiv proxy and IndexedDB storage; native networking, request spacing, native menus, and disk storage belong to the installed app. Browser and native preferences are separate.

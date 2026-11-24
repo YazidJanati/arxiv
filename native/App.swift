@@ -93,10 +93,10 @@ final class ArxivNetwork {
 
 final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
     private let network = ArxivNetwork()
-    private let recommender = RecommendationWorker()
+    private let recommender: RecommendationWorker
     func stopRecommendations() { recommender.stop() }
     private let directory: URL
-    init(directory: URL) { self.directory = directory }
+    init(directory: URL) { self.directory = directory; self.recommender = RecommendationWorker(directory: directory) }
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage, replyHandler reply: @escaping Reply) {
         guard message.frameInfo.isMainFrame, message.frameInfo.request.url?.scheme == "arxiv-app",
               let body = message.body as? [String: Any], let operation = body["operation"] as? String else {
@@ -104,6 +104,8 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
         }
         do {
             switch operation {
+            case "recommendationCancel":
+                recommender.cancel(); reply(NSNull(), nil)
             case "recommendationStatus", "recommendationLogin", "recommend":
                 recommender.handle(operation: operation, body: body, reply: reply)
             case "fetch":

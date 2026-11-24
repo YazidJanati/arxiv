@@ -25,3 +25,5 @@
 #settings-dialog{width:620px}.recommendation-toggle{display:flex;align-items:center;gap:8px;font-size:11px;line-height:1.8}.recommendation-toggle input{accent-color:var(--muted)}
 #profile-form{margin-top:18px}textarea{font:inherit;color:inherit;background:var(--sidebar);border:1px solid var(--border);border-radius:2px;padding:10px;width:100%;resize:vertical;line-height:1.8;font-size:11px;min-height:160px}textarea:focus-visible{outline:1px solid var(--muted)}
 .plain-button{border:1px solid var(--border);border-radius:2px;padding:6px 10px;font-size:10px}.profile-actions{display:flex;align-items:center;gap:12px}#profile-status{flex:1}
+
+#for-you-controls>div{flex:1;min-width:0}#for-you-controls .plain-button{padding:6px 10px;text-decoration:none}#for-you-controls{flex-wrap:wrap}#for-you-controls .hint{margin:5px 0 0}.budget-label{margin-top:18px}#daily-batch-limit{font:inherit;width:85px;padding:7px;background:var(--sidebar);border:1px solid var(--border);border-radius:2px}

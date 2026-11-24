@@ -1,5 +1,5 @@
 import "./style.css";
-import { Recommender, connectionStatus, connectAccount, defaultProfile, type Recommendation, type RecommendationStatus } from "./recommendations";
+import { Recommender, connectionStatus, connectAccount, defaultProfile, defaultModel, defaultDailyBatchLimit, fallbackModels, type Recommendation, type RecommendationStatus } from "./recommendations";
 import { windowPapers, type SearchPaper } from "./search";
 import { icon } from "./icons";
 import { formatDate, isWeekend, offsetDate, today, weekDays } from "./dates";
@@ -16,7 +16,7 @@ let papers: Paper[] = [], loading = false, error = "", cacheTime: number | null 
 let recommendationConnection: RecommendationStatus = { available: desktop, connected: false, message: "Checking ChatGPT connection…" };
 let profileDirty = false;
 let activeRecommendations = new Map<string, Recommendation>();
-const profile = () => state.recommendations ?? { enabled: true, profile: defaultProfile };
+const profile = () => ({ profile: state.recommendations?.profile ?? defaultProfile, model: state.recommendations?.model ?? defaultModel, dailyBatchLimit: state.recommendations?.dailyBatchLimit ?? defaultDailyBatchLimit });
 const forYou = () => mode === "day" && selection?.category === "for-you";
 const recommender = new Recommender(() => ({ ...profile(), connected: recommendationConnection.connected, categories: [...state.categories], feeds: windowFeeds.values() }), (date) => {
   if (forYou() && selection?.date === date) { syncRecommendations(); renderPapers(); }
@@ -25,13 +25,13 @@ function syncRecommendations(): void {
   if (!forYou() || !selection) return;
   const record = recommender.current(selection.date);
   const candidates = new Map(recommender.candidates(selection.date).map((paper) => [paper.id, paper]));
-  papers = profile().enabled ? (record?.items ?? []).flatMap((item) => candidates.has(item.id) ? [candidates.get(item.id)!] : []) : [];
+  papers = (record?.items ?? []).flatMap((item) => candidates.has(item.id) ? [candidates.get(item.id)!] : []);
   cacheTime = record?.generatedAt ?? null;
 }
 function kickRecommendations(): void {
   if (!appReady) return;
   recommender.prune();
-  for (const date of windowDates()) recommender.ensure(date);
+  for (const date of windowDates()) void recommender.restore(date);
 }
 const windowFeeds = new Map<string, DayFeed>();
 let windowIndex: { key: string; papers: SearchPaper[] } | null = null;
@@ -74,12 +74,16 @@ document.querySelector("#app")!.innerHTML = `
   <div class="dialog-heading"><h2 id="settings-title">Settings</h2>${tool("close-settings", "close", "Close settings")}</div>
   <label for="theme" class="field-label">Appearance</label><select id="theme"><option value="dark">Dark</option><option value="light">Light</option><option value="system">System</option></select>
   <h3>For you</h3>
-  <label class="recommendation-toggle"><input id="recommendations-enabled" type="checkbox" /> Recommend papers automatically</label>
+  <p class="hint">Manual reviews only. Opening a day, refreshing listings, or changing settings never starts a model request.</p>
+  <label class="field-label" for="recommendation-model">Review model</label><select id="recommendation-model"></select>
+  <label class="field-label budget-label" for="daily-batch-limit">Daily batch limit</label><input id="daily-batch-limit" type="number" min="1" max="100" step="1" value="5" />
+  <p class="hint">One batch reviews up to 30 abstracts. Default: 5 batches/day. Counts attempted requests, including failures. Completed batches are saved before another request starts.</p>
+  <p id="review-usage" class="hint" role="status"></p>
   <p id="chatgpt-status" class="hint" role="status"></p><button id="connect-chatgpt" class="plain-button">Connect ChatGPT</button>
   <form id="profile-form"><label for="research-profile" class="field-label">Research profile</label><textarea id="research-profile" rows="13" maxlength="12000" required spellcheck="false"></textarea>
   <p class="hint">Guide the recommender in your own words. Include core interests, nearby ideas, examples, and what makes a paper worth reading. No fixed number of recommendations.</p>
   <div class="profile-actions"><button type="submit" class="plain-button">Save profile</button><span id="profile-status" class="hint" role="status"></span></div></form>
-  <p class="hint">Each day’s For you reviews titles, authors, and complete abstracts only. No PDFs or full text. Your profile and paper metadata are sent to OpenAI through Codex, using your ChatGPT plan limits. Results stay on this Mac. Runs while arxiv is open; missed days catch up on launch.</p>
+  <p class="hint">Each day’s For you reviews titles, authors, and complete abstracts only. No PDFs or full text. Your profile and paper metadata are sent to OpenAI through Codex, using your ChatGPT plan limits. Results stay on this Mac. Only Review day starts a paid model request. Cached results remain readable offline. Estimated input tokens are approximate; the daily batch cap is enforced locally.</p>
   <h3>Sections</h3><div id="section-list"></div>
   <form id="section-form"><label class="field-label" for="category-code">Add an arXiv section</label><div class="add-field"><input id="category-code" placeholder="e.g. cs.AI" list="category-options" autocomplete="off" spellcheck="false" maxlength="50" required /><button type="submit">Add</button></div><p id="category-error" class="form-error" role="alert"></p></form>
   <datalist id="category-options">${Object.entries(categoryNames).map(([code, name]) => `<option value="${code}">${name}</option>`).join("")}</datalist>
@@ -240,14 +244,14 @@ function renderPapers(): void {
     else if (isWeekend(selection!.date)) { message = "No daily listing on weekends."; detail = "Choose a weekday to read its papers."; }
     else if (forYou()) {
       const date = selection!.date, record = recommender.current(date);
-      if (!profile().enabled) { message = "Recommendations are paused."; detail = "Enable For you in Settings to resume."; }
-      else if (!profile().profile.trim()) { message = "Set up your research profile."; detail = "Describe your interests in Settings."; }
-      else if (recommender.errors.has(date)) { message = "Couldn’t review this day."; detail = "Use Refresh to retry. Your papers and bookmarks are unchanged."; }
-      else if (record) { message = "No recommendations for this day."; detail = "The review found no substantive matches or promising nearby ideas."; }
+      if (!profile().profile.trim()) { message = "Set up your research profile."; detail = "Describe your interests in Settings."; }
+      else if (recommender.errors.has(date)) { message = "Couldn’t review this day."; detail = "Click Review day to resume. Completed batches are saved."; }
+      else if (record && recommender.coverage(date).reviewed === recommender.coverage(date).total) { message = "No recommendations for this day."; detail = "The review found no substantive matches or promising nearby ideas."; }
       else if (!recommender.candidates(date).length && recommender.input(date)) { message = "No papers announced for this day."; detail = "For you only uses this day’s actual arXiv listings."; }
       else if (!recommendationConnection.connected) { message = "Connect ChatGPT to review this day."; detail = "Your research profile is ready in Settings."; }
       else if (recommender.progress.has(date)) { message = "Reviewing this day’s papers…"; detail = "Looking for direct matches and promising nearby ideas, with no fixed quota."; }
-      else { message = "Waiting for this day’s listings."; detail = "Every subscribed section must be available before a complete review."; }
+      else if (!recommender.input(date)) { message = "Waiting for this day’s listings."; detail = "Every subscribed section must be available before a complete review."; }
+      else { message = "Ready to review this day."; detail = "Click Review day above. Only unreviewed or changed abstracts will be sent; no automatic requests."; }
     }
     else if (selection!.date === today()) { message = "No papers announced for this day yet."; detail = "Try refreshing later, or choose an earlier weekday."; }
     $("papers").innerHTML = `<div class="empty-state"><p>${escape(message)}</p><p class="hint">${escape(detail)}</p></div>`;
@@ -259,10 +263,14 @@ function renderRecommendationControls(): void {
   const shown = forYou() && !searching() && !!selection;
   $("for-you-controls").hidden = !shown;
   if (!shown) return;
-  const date = selection!.date, record = recommender.current(date);
+  const date = selection!.date, coverage = recommender.coverage(date);
   const unavailable = isWeekend(date) || date > today();
-  const status = unavailable ? "Recommendations follow arXiv announcement days." : !profile().enabled ? "Recommendations paused" : recommender.errors.get(date) || recommender.progress.get(date) || (record ? "Based on complete abstracts · direct matches and nearby ideas" : recommendationConnection.message);
-  $("for-you-controls").innerHTML = `<span role="status">${escape(status)}</span><button id="edit-profile">Edit profile</button>`;
+  const active = !!recommender.activeDate;
+  const status = unavailable ? "Recommendations follow arXiv announcement days." : recommender.errors.get(date) || recommender.progress.get(date) || `${coverage.reviewed}/${coverage.total} abstracts reviewed · ${coverage.batches} batches remaining · ~${coverage.estimatedTokens.toLocaleString()} input tokens`;
+  const remaining = Math.max(0, profile().dailyBatchLimit - recommender.usedBatches());
+  $("for-you-controls").innerHTML = `<div><span role="status">${escape(status)}</span><p class="hint">${escape(profile().model)} · ${remaining} batches left today · estimates exclude output and model overhead</p></div><button id="review-day" class="plain-button" ${unavailable || loading || active || !recommender.input(date) || !coverage.remaining.length || !recommendationConnection.connected || remaining === 0 ? "disabled" : ""}>Review day</button>${active ? '<button id="stop-review">Stop review</button>' : ""}<button id="edit-profile">Edit profile</button>`;
+  $("review-usage").textContent = `Today: ${recommender.usedBatches()}/${profile().dailyBatchLimit} batches · ${recommender.usage.date === today() ? recommender.usage.inputTokens.toLocaleString() : "0"} input / ${recommender.usage.date === today() ? recommender.usage.outputTokens.toLocaleString() : "0"} output tokens reported`;
+
 }
 async function loadForYou(force = false): Promise<void> {
   if (!selection) return;
@@ -282,7 +290,7 @@ async function loadForYou(force = false): Promise<void> {
   if (token !== epoch) return;
   loading = false;
   if (failures.length) error = `Some arXiv listings could not refresh. ${failures.join(" ")}`;
-  recommender.ensure(date, force); syncRecommendations(); renderPapers();
+  await recommender.restore(date); syncRecommendations(); renderPapers();
 }
 async function loadSelection(force = false): Promise<void> {
   if (forYou()) return loadForYou(force);
@@ -338,7 +346,12 @@ function showSettings(focusAdd = false): void {
 }
 function renderSettings(): void {
   $<HTMLSelectElement>("theme").value = state.theme;
-  $<HTMLInputElement>("recommendations-enabled").checked = profile().enabled;
+  const models = recommendationConnection.models ?? fallbackModels;
+  const choices = models.some((model) => model.id === profile().model) ? models : [{ id: profile().model, name: profile().model }, ...models];
+  $("recommendation-model").innerHTML = choices.map((model) => `<option value="${escape(model.id)}">${escape(model.name)}</option>`).join("");
+  $<HTMLSelectElement>("recommendation-model").value = profile().model;
+  $<HTMLInputElement>("daily-batch-limit").value = String(profile().dailyBatchLimit);
+  $("review-usage").textContent = `Today: ${recommender.usedBatches()}/${profile().dailyBatchLimit} batches · ${recommender.usage.inputTokens.toLocaleString()} input / ${recommender.usage.outputTokens.toLocaleString()} output tokens reported`;
   if (!profileDirty) $<HTMLTextAreaElement>("research-profile").value = profile().profile;
   renderConnection();
   $("section-list").innerHTML = state.categories.map((code) => `<div class="setting-section"><span>${escape(code)}</span><span class="hint">${escape(categoryNames[code] ?? "arXiv section")}</span><button class="icon-button" data-remove="${escape(code)}" aria-label="Remove ${escape(code)}" title="Remove section" ${state.categories.length < 2 ? "disabled" : ""}>${icon("close")}</button></div>`).join("");
@@ -351,28 +364,41 @@ function renderConnection(): void {
 async function checkConnection(): Promise<void> {
   try { recommendationConnection = await connectionStatus(); }
   catch { recommendationConnection = { available: desktop, connected: false, message: "Could not check ChatGPT. Try connecting again." }; }
+  if (recommendationConnection.usage) recommender.usage = recommendationConnection.usage;
   renderConnection(); kickRecommendations(); renderRecommendationControls();
 }
-$("for-you-controls").onclick = (event) => { if ((event.target as HTMLElement).closest("#edit-profile")) { showSettings(); $("research-profile").focus(); } };
+$("for-you-controls").onclick = (event) => {
+  const target = event.target as HTMLElement;
+  if (target.closest("#edit-profile")) { showSettings(); $("research-profile").focus(); }
+  else if (target.closest("#review-day") && selection) recommender.review(selection.date);
+  else if (target.closest("#stop-review")) void recommender.cancel().catch((cause) => notice(String(cause)));
+};
 $("research-profile").oninput = () => { profileDirty = true; $("profile-status").textContent = "Unsaved changes"; };
 $("profile-form").onsubmit = (event) => {
   event.preventDefault();
   const value = $<HTMLTextAreaElement>("research-profile").value.trim();
   if (!value) return;
-  state.recommendations = { ...profile(), profile: value }; profileDirty = false;
-  persist(); recommender.reset(); kickRecommendations();
-  $("profile-status").textContent = "Profile saved · reviews update automatically";
+  void recommender.cancel().catch((cause) => notice(String(cause)));
+  state.recommendations = { ...profile(), enabled: false, profile: value }; profileDirty = false;
+  persist(); kickRecommendations();
+  $("profile-status").textContent = "Profile saved · click Review day when ready";
   if (forYou()) { syncRecommendations(); renderPapers(); }
 };
-$("recommendations-enabled").onchange = () => {
-  state.recommendations = { ...profile(), enabled: $<HTMLInputElement>("recommendations-enabled").checked };
-  persist(); recommender.reset(); kickRecommendations();
-  if (forYou()) { syncRecommendations(); renderPapers(); }
+$("recommendation-model").onchange = () => {
+  void recommender.cancel().catch((cause) => notice(String(cause)));
+  state.recommendations = { ...profile(), enabled: false, model: $<HTMLSelectElement>("recommendation-model").value };
+  persist(); renderRecommendationControls();
+};
+$("daily-batch-limit").onchange = () => {
+  const input = $<HTMLInputElement>("daily-batch-limit"), limit = Number(input.value);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) { input.value = String(profile().dailyBatchLimit); return; }
+  state.recommendations = { ...profile(), enabled: false, dailyBatchLimit: limit };
+  persist(); renderRecommendationControls();
 };
 $("connect-chatgpt").onclick = async () => {
   const button = $<HTMLButtonElement>("connect-chatgpt"); button.disabled = true;
   $("chatgpt-status").textContent = "Connecting… complete sign-in in your browser if prompted.";
-  try { recommendationConnection = await (recommendationConnection.connected ? connectionStatus() : connectAccount()); recommender.reset(); kickRecommendations(); }
+  try { recommendationConnection = await (recommendationConnection.connected ? connectionStatus() : connectAccount()); if (recommendationConnection.usage) recommender.usage = recommendationConnection.usage; kickRecommendations(); }
   catch (cause) { recommendationConnection.message = String(cause).replace(/^Error: /, ""); }
   renderConnection(); renderRecommendationControls();
 };
@@ -521,7 +547,7 @@ function absorbFeed(feed: DayFeed, render = true): void {
   if (render && (selected || windowSearching())) renderPapers();
   // A complete date across all subscribed sections is the unit of review.
   // Do not review partially loaded categories or label unavailable days.
-  if (appReady) recommender.ensure(feed.date);
+  if (appReady) void recommender.restore(feed.date);
 }
 async function maintainAndWarm(force = false): Promise<void> {
   if (!appReady) return;
@@ -583,10 +609,16 @@ async function start(): Promise<void> {
         if (valid.length) state.categories = valid;
       }
       if (["system", "dark", "light"].includes(saved.theme)) state.theme = saved.theme;
-      if (saved.recommendations && typeof saved.recommendations.profile === "string" && saved.recommendations.profile.length <= 12000 && typeof saved.recommendations.enabled === "boolean") state.recommendations = saved.recommendations;
+      if (saved.recommendations && typeof saved.recommendations.profile === "string" && saved.recommendations.profile.length <= 12000 && typeof saved.recommendations.enabled === "boolean") state.recommendations = { enabled: false, profile: saved.recommendations.profile,
+        model: typeof saved.recommendations.model === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(saved.recommendations.model) ? saved.recommendations.model : defaultModel,
+        dailyBatchLimit: Number.isInteger(saved.recommendations.dailyBatchLimit) && saved.recommendations.dailyBatchLimit! >= 1 && saved.recommendations.dailyBatchLimit! <= 100 ? saved.recommendations.dailyBatchLimit : defaultDailyBatchLimit };
       if (Array.isArray(saved.bookmarks)) state.bookmarks = saved.bookmarks.filter((p) => p && typeof p.id === "string" && typeof p.title === "string" && Array.isArray(p.authors) && p.authors.every((a: unknown) => typeof a === "string") && /^\d{4}-\d{2}-\d{2}$/.test(p.date) && typeof p.category === "string");
     }
   } catch (cause) { storageReady = false; notice(`Could not read your saved preferences. ${String(cause)}`); }
+  if (storageReady) {
+    state.recommendations = { ...profile(), enabled: false };
+    persist();
+  }
   applyTheme(); renderSidebar(); renderPapers();
   if (!storageReady) return;
   try { await migrateSavedAbstracts(); appReady = true; void checkConnection(); void maintainAndWarm(); }

@@ -1,5 +1,5 @@
 import "./style.css";
-import { Recommender, connectionStatus, connectAccount, defaultProfile, defaultModel, defaultDailyBatchLimit, fallbackModels, type Recommendation, type RecommendationStatus } from "./recommendations";
+import { Recommender, connectionStatus, connectAccount, defaultProfile, defaultModel, defaultDailyBatchLimit, defaultReviewTokenLimit, fallbackModels, type Recommendation, type RecommendationStatus } from "./recommendations";
 import { windowPapers, type SearchPaper } from "./search";
 import { icon } from "./icons";
 import { formatDate, isWeekend, offsetDate, today, weekDays } from "./dates";
@@ -16,10 +16,11 @@ let papers: Paper[] = [], loading = false, error = "", cacheTime: number | null 
 let recommendationConnection: RecommendationStatus = { available: desktop, connected: false, message: "Checking ChatGPT connection…" };
 let profileDirty = false;
 let activeRecommendations = new Map<string, Recommendation>();
-const profile = () => ({ profile: state.recommendations?.profile ?? defaultProfile, model: state.recommendations?.model ?? defaultModel, dailyBatchLimit: state.recommendations?.dailyBatchLimit ?? defaultDailyBatchLimit });
+const profile = () => ({ profile: state.recommendations?.profile ?? defaultProfile, model: state.recommendations?.model ?? defaultModel, dailyBatchLimit: state.recommendations?.dailyBatchLimit ?? defaultDailyBatchLimit, reviewTokenLimit: state.recommendations?.reviewTokenLimit ?? defaultReviewTokenLimit });
 const forYou = () => mode === "day" && selection?.category === "for-you";
 const recommender = new Recommender(() => ({ ...profile(), connected: recommendationConnection.connected, categories: [...state.categories], feeds: windowFeeds.values() }), (date) => {
   if (forYou() && selection?.date === date) { syncRecommendations(); renderPapers(); }
+  renderConnection();
 });
 function syncRecommendations(): void {
   if (!forYou() || !selection) return;
@@ -78,6 +79,10 @@ document.querySelector("#app")!.innerHTML = `
   <label class="field-label" for="recommendation-model">Review model</label><select id="recommendation-model"></select>
   <label class="field-label budget-label" for="daily-batch-limit">Daily batch limit</label><input id="daily-batch-limit" type="number" min="1" max="100" step="1" value="5" />
   <p class="hint">One batch reviews up to 30 abstracts. Default: 5 batches/day. Counts attempted requests, including failures. Completed batches are saved before another request starts.</p>
+  <label class="field-label budget-label" for="review-token-limit">Paper-review token budget (rolling 5 hours)</label><input id="review-token-limit" type="number" min="1" max="10000000" step="1" value="200000" />
+  <p class="hint">Default: 200,000 reported input + output tokens for this app in the last five hours. Input includes cached tokens; cached tokens are not added again. No percentage estimate or minimum charge per batch. This is not a conversion to ChatGPT quota. Checked before each batch; a running batch can cross the limit. Missing usage reports are shown rather than assigned a guessed charge. Tracking starts with this version. Your daily batch limit also applies.</p>
+  <p id="account-identity" class="hint"></p><p id="five-hour-usage" class="hint" role="status"></p><p id="paper-review-budget" class="hint" role="status"></p>
+  <p class="hint">This connection uses the account signed in to the local Codex CLI. Changing accounts on the ChatGPT website does not switch it. To use another account, sign in to that account in Codex, then click Check connection here.</p>
   <p id="review-usage" class="hint" role="status"></p>
   <p id="chatgpt-status" class="hint" role="status"></p><button id="connect-chatgpt" class="plain-button">Connect ChatGPT</button>
   <form id="profile-form"><label for="research-profile" class="field-label">Research profile</label><textarea id="research-profile" rows="13" maxlength="12000" required spellcheck="false"></textarea>
@@ -268,10 +273,16 @@ function renderRecommendationControls(): void {
   const active = !!recommender.activeDate;
   const status = unavailable ? "Recommendations follow arXiv announcement days." : recommender.errors.get(date) || recommender.progress.get(date) || `${coverage.reviewed}/${coverage.total} abstracts reviewed · ${coverage.batches} batches remaining · ~${coverage.estimatedTokens.toLocaleString()} input tokens`;
   const remaining = Math.max(0, profile().dailyBatchLimit - recommender.usedBatches());
-  $("for-you-controls").innerHTML = `<div><span role="status">${escape(status)}</span><p class="hint">${escape(profile().model)} · ${remaining} batches left today · estimates exclude output and model overhead</p></div><button id="review-day" class="plain-button" ${unavailable || loading || active || !recommender.input(date) || !coverage.remaining.length || !recommendationConnection.connected || remaining === 0 ? "disabled" : ""}>Review day</button>${active ? '<button id="stop-review">Stop review</button>' : ""}<button id="edit-profile">Edit profile</button>`;
+  $("for-you-controls").innerHTML = `<div><span role="status">${escape(status)}</span><p id="review-timing" class="hint">${escape(recommender.timingSummary(date))}</p><p class="hint">${escape(profile().model)} · ${remaining} batches left today · estimates exclude output and model overhead</p><p class="hint">Paper-review tokens (last 5h): ${recommender.tokenUsage ? recommender.tokenUsage.totalTokens.toLocaleString() : "—"} / ${profile().reviewTokenLimit.toLocaleString()}${recommender.tokenUsage?.unreportedAttempts ? " · some attempts have no usage report" : ""}</p></div><button id="review-day" class="plain-button" ${unavailable || loading || active || !recommender.input(date) || !coverage.remaining.length || !recommendationConnection.connected || remaining === 0 ? "disabled" : ""}>Review day</button>${active ? '<button id="stop-review">Stop review</button>' : ""}<button id="edit-profile">Edit profile</button>`;
   $("review-usage").textContent = `Today: ${recommender.usedBatches()}/${profile().dailyBatchLimit} batches · ${recommender.usage.date === today() ? recommender.usage.inputTokens.toLocaleString() : "0"} input / ${recommender.usage.date === today() ? recommender.usage.outputTokens.toLocaleString() : "0"} output tokens reported`;
 
 }
+// Update the timer without rebuilding paper rows or replacing the Stop button.
+setInterval(() => {
+  if (!recommender.activeDate || !selection || !forYou()) return;
+  const timing = document.getElementById("review-timing");
+  if (timing) timing.textContent = recommender.timingSummary(selection.date);
+}, 1000);
 async function loadForYou(force = false): Promise<void> {
   if (!selection) return;
   const date = selection.date, token = ++epoch, categories = [...state.categories];
@@ -358,13 +369,20 @@ function renderSettings(): void {
 }
 function renderConnection(): void {
   $("chatgpt-status").textContent = recommendationConnection.message;
+  const account = recommendationConnection.account;
+  $("account-identity").textContent = account ? `Account: ${account.email ?? "Email unavailable"}${account.planType ? ` · ${account.planType}` : ""}${account.workspaceName ? ` · ${account.workspaceName}` : ""}` : "Account identity unavailable — click Check connection to refresh.";
+  const window = recommendationConnection.fiveHourUsage;
+  $("five-hour-usage").textContent = window ? `Five-hour usage: ${window.usedPercent}% used · resets ${new Date(window.resetsAt * 1000).toLocaleString()} · account total` : "Account usage unavailable; the app’s token ledger is tracked separately.";
+  const tokenUsage = recommender.tokenUsage ?? recommendationConnection.reviewTokenUsage;
+  $("paper-review-budget").textContent = tokenUsage ? `Paper reviews: ${tokenUsage.totalTokens.toLocaleString()} / ${profile().reviewTokenLimit.toLocaleString()} tokens in the last 5h (${tokenUsage.inputTokens.toLocaleString()} input + ${tokenUsage.outputTokens.toLocaleString()} output)${tokenUsage.unreportedAttempts ? ` · ${tokenUsage.unreportedAttempts} attempts have no usage report; total may be incomplete` : ""}` : "Token ledger unavailable. Click Check connection to refresh.";
+  $<HTMLInputElement>("review-token-limit").value = String(profile().reviewTokenLimit);
   $<HTMLButtonElement>("connect-chatgpt").disabled = !recommendationConnection.available;
   $("connect-chatgpt").textContent = recommendationConnection.connected ? "Check connection" : "Connect ChatGPT";
 }
 async function checkConnection(): Promise<void> {
   try { recommendationConnection = await connectionStatus(); }
   catch { recommendationConnection = { available: desktop, connected: false, message: "Could not check ChatGPT. Try connecting again." }; }
-  if (recommendationConnection.usage) recommender.usage = recommendationConnection.usage;
+  if (recommendationConnection.usage) recommender.usage = recommendationConnection.usage; if (recommendationConnection.reviewTokenUsage) recommender.tokenUsage = recommendationConnection.reviewTokenUsage;
   renderConnection(); kickRecommendations(); renderRecommendationControls();
 }
 $("for-you-controls").onclick = (event) => {
@@ -395,10 +413,17 @@ $("daily-batch-limit").onchange = () => {
   state.recommendations = { ...profile(), enabled: false, dailyBatchLimit: limit };
   persist(); renderRecommendationControls();
 };
+$("review-token-limit").onchange = () => {
+  const input = $<HTMLInputElement>("review-token-limit"), limit = Number(input.value);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 10000000) { input.value = String(profile().reviewTokenLimit); return; }
+  void recommender.cancel().catch((cause) => notice(String(cause)));
+  state.recommendations = { ...profile(), enabled: false, reviewTokenLimit: limit };
+  persist(); renderConnection(); renderRecommendationControls();
+};
 $("connect-chatgpt").onclick = async () => {
   const button = $<HTMLButtonElement>("connect-chatgpt"); button.disabled = true;
   $("chatgpt-status").textContent = "Connecting… complete sign-in in your browser if prompted.";
-  try { recommendationConnection = await (recommendationConnection.connected ? connectionStatus() : connectAccount()); if (recommendationConnection.usage) recommender.usage = recommendationConnection.usage; kickRecommendations(); }
+  try { recommendationConnection = await (recommendationConnection.connected ? connectionStatus() : connectAccount()); if (recommendationConnection.usage) recommender.usage = recommendationConnection.usage; if (recommendationConnection.reviewTokenUsage) recommender.tokenUsage = recommendationConnection.reviewTokenUsage; kickRecommendations(); }
   catch (cause) { recommendationConnection.message = String(cause).replace(/^Error: /, ""); }
   renderConnection(); renderRecommendationControls();
 };
@@ -611,7 +636,8 @@ async function start(): Promise<void> {
       if (["system", "dark", "light"].includes(saved.theme)) state.theme = saved.theme;
       if (saved.recommendations && typeof saved.recommendations.profile === "string" && saved.recommendations.profile.length <= 12000 && typeof saved.recommendations.enabled === "boolean") state.recommendations = { enabled: false, profile: saved.recommendations.profile,
         model: typeof saved.recommendations.model === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(saved.recommendations.model) ? saved.recommendations.model : defaultModel,
-        dailyBatchLimit: Number.isInteger(saved.recommendations.dailyBatchLimit) && saved.recommendations.dailyBatchLimit! >= 1 && saved.recommendations.dailyBatchLimit! <= 100 ? saved.recommendations.dailyBatchLimit : defaultDailyBatchLimit };
+        dailyBatchLimit: Number.isInteger(saved.recommendations.dailyBatchLimit) && saved.recommendations.dailyBatchLimit! >= 1 && saved.recommendations.dailyBatchLimit! <= 100 ? saved.recommendations.dailyBatchLimit : defaultDailyBatchLimit,
+        reviewTokenLimit: Number.isInteger(saved.recommendations.reviewTokenLimit) && saved.recommendations.reviewTokenLimit! >= 1 && saved.recommendations.reviewTokenLimit! <= 10000000 ? saved.recommendations.reviewTokenLimit : defaultReviewTokenLimit };
       if (Array.isArray(saved.bookmarks)) state.bookmarks = saved.bookmarks.filter((p) => p && typeof p.id === "string" && typeof p.title === "string" && Array.isArray(p.authors) && p.authors.every((a: unknown) => typeof a === "string") && /^\d{4}-\d{2}-\d{2}$/.test(p.date) && typeof p.category === "string");
     }
   } catch (cause) { storageReady = false; notice(`Could not read your saved preferences. ${String(cause)}`); }

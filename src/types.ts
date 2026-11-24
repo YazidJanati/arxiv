@@ -11,7 +11,7 @@ export interface State {
   categories: string[];
   theme: Theme;
   bookmarks: Paper[];
-  recommendations?: { enabled: boolean; profile: string; model?: string; dailyBatchLimit?: number };
+  recommendations?: { enabled: boolean; profile: string; model?: string; dailyBatchLimit?: number; reviewTokenLimit?: number };
 }
 export interface DayFeed {
   schema: 2;

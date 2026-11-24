@@ -27,16 +27,17 @@ test.beforeEach(async ({ page }) => {
       if (message.operation === "fetch") { const response = await fetch("/arxiv" + message.path); if (!response.ok) throw new Error("Offline"); return response.text(); }
       if (["appearance", "open"].includes(message.operation)) return null;
       if (message.operation === "recommendationCancel") { (window as any).rejectReview?.(new Error("Cancelled")); return null; }
-      if (["recommendationStatus", "recommendationLogin"].includes(message.operation)) return { available: true, connected: localStorage.getItem("mock-mode") !== "signed-out", message: "Connected through Codex", models: [{ id: "gpt-6.1-terra", name: "GPT-6.1 Terra" }, { id: "gpt-6.1-sol", name: "GPT-6.1 Sol" }], usage: usage() };
+      if (["recommendationStatus", "recommendationLogin"].includes(message.operation)) return { available: true, connected: localStorage.getItem("mock-mode") !== "signed-out", message: "Connected through Codex", account: { email: "reader@example.com", planType: "plus", workspaceName: "Research" }, fiveHourUsage: { usedPercent: 90, resetsAt: 1795552212 }, reviewTokenUsage: { totalTokens: 450, inputTokens: 400, outputTokens: 50, unreportedAttempts: 0 }, models: [{ id: "gpt-6.1-terra", name: "GPT-6.1 Terra" }, { id: "gpt-6.1-sol", name: "GPT-6.1 Sol" }], usage: usage() };
       if (message.operation === "recommend") {
         const daily = usage();
         if (daily.batches >= message.dailyBatchLimit) throw new Error("Daily batch limit reached");
         daily.batches++; daily.inputTokens += 400; daily.outputTokens += 50; localStorage.setItem("mock-usage", JSON.stringify(daily));
         const input = JSON.parse(message.prompt), all = JSON.parse(localStorage.getItem("review-calls") ?? "[]");
-        all.push({ ...input, instructions: message.instructions, model: message.model }); localStorage.setItem("review-calls", JSON.stringify(all));
+        all.push({ ...input, instructions: message.instructions, model: message.model, reviewTokenLimit: message.reviewTokenLimit }); localStorage.setItem("review-calls", JSON.stringify(all));
         const mode = localStorage.getItem("mock-mode");
         if (mode === "hold") await new Promise<void>((resolve, reject) => { (window as any).releaseReview = resolve; (window as any).rejectReview = reject; });
         if (mode === "offline") throw new Error("Offline or usage limit reached");
+        if (mode === "unknown-once") { localStorage.removeItem("mock-mode"); return { recommendations: [{ id: "9999.99999", kind: "direct", reason: "Invented paper" }], dailyUsage: daily }; }
         if (mode === "unknown") return { recommendations: [{ id: "9999.99999", kind: "direct", reason: "Invented paper" }] };
         if (mode === "empty") return { recommendations: [], dailyUsage: daily };
         return { dailyUsage: daily, recommendations: input.papers.map((paper: any, index: number) => ({ id: paper.id, kind: index % 2 ? "adjacent" : "direct", reason: message.instructions.includes("New profile") ? "New profile connection to randomized algorithms." : index % 2 ? "A nearby idea: <img src=x onerror=alert(1)> offers a transferable probabilistic construction." : "Introduces a useful methodological reformulation." })) };
@@ -95,12 +96,12 @@ test("profile changes cancel in-flight work and require a fresh explicit review"
   await page.evaluate(() => localStorage.removeItem("mock-mode")); await review(page);
   await expect(page.locator(".recommendation-reason").first()).toContainText("New profile connection");
 });
-test("invalid output is rejected without automatic retries", async ({ page }) => {
+test("persistent invalid output stops after one bounded repair attempt", async ({ page }) => {
   await forYou(page); await page.evaluate(() => localStorage.setItem("mock-mode", "unknown"));
-  await page.locator("#review-day").click(); await expect(page.locator("#for-you-controls")).toContainText("unknown paper");
-  await expect(page.locator(".paper")).toHaveCount(0); expect(await calls(page)).toHaveLength(1);
+  await page.locator("#review-day").click(); await expect(page.locator("#for-you-controls")).toContainText("invalid results twice");
+  await expect(page.locator(".paper")).toHaveCount(0); expect(await calls(page)).toHaveLength(2);
   await page.locator("#refresh").click(); await expect(page.locator("#reader")).toHaveAttribute("aria-busy", "false");
-  expect(await calls(page)).toHaveLength(1);
+  expect(await calls(page)).toHaveLength(2);
 });
 test("zero matches are cached and weekend/future dates cannot invoke a model", async ({ page }) => {
   await forYou(page); await page.evaluate(() => localStorage.setItem("mock-mode", "empty")); await review(page);
@@ -160,4 +161,58 @@ test("week rollover cannot recreate expired in-flight results and cleanup preser
   await expect(page.locator("#stop-review")).toHaveCount(0);
   expect(JSON.parse(result!).recommendations.model).toBe("gpt-6.1-terra");
   expect(await page.evaluate(() => localStorage.getItem("native-recommendations-v1-2026-10-23"))).toBeNull();
+});
+
+test("settings show account and usage; ceiling persists and travels with a manual review", async ({ page }) => {
+  await forYou(page); await page.locator("#edit-profile").click();
+  await expect(page.locator("#account-identity")).toContainText("reader@example.com · plus · Research");
+  await expect(page.locator("#five-hour-usage")).toContainText("90% used");
+  await expect(page.locator("#paper-review-budget")).toContainText("450 / 200,000 tokens");
+  await expect(page.locator("#review-token-limit")).toHaveValue("200000");
+  await page.locator("#review-token-limit").fill("50000"); await page.locator("#review-token-limit").dispatchEvent("change");
+  expect(await calls(page)).toHaveLength(0);
+  await page.reload(); await expect(page.locator("#source-label")).toHaveText("2 weeks cached · abstracts included");
+  await forYou(page); await page.locator("#edit-profile").click();
+  await expect(page.locator("#review-token-limit")).toHaveValue("50000");
+  await page.locator("#close-settings").click(); await review(page);
+  expect((await calls(page))[0].reviewTokenLimit).toBe(50000);
+});
+
+test("harmless ID formatting, duplicate selections and long explanations are repaired locally", async ({ page }) => {
+  const result = await page.evaluate(async () => {
+    const { validateRecommendations } = await import("/src/recommendations.ts");
+    const rows = validateRecommendations({ recommendations: [
+      { id: "https://arxiv.org/abs/2610.00001v2", kind: " Direct ", reason: "A".repeat(1700) },
+      { id: " arXiv:2610.00001 ", kind: "adjacent", reason: "Duplicate" },
+    ] }, new Set(["2610.00001"]));
+    let rejected = false;
+    try { validateRecommendations({ recommendations: [{ id: "9999.99999", kind: "direct", reason: "Unknown" }] }, new Set(["2610.00001"])); } catch { rejected = true; }
+    return { rows, rejected };
+  });
+  expect(result.rows).toHaveLength(1); expect(result.rows[0].id).toBe("2610.00001");
+  expect(result.rows[0].reason).toHaveLength(1600); expect(result.rejected).toBe(true);
+  expect(await calls(page)).toHaveLength(0);
+});
+test("one malformed response recovers automatically within the budget", async ({ page }) => {
+  await forYou(page); await page.evaluate(() => localStorage.setItem("mock-mode", "unknown-once"));
+  await review(page); expect(await calls(page)).toHaveLength(2);
+  await expect(page.locator(".paper")).toHaveCount(2);
+});
+test("a validation repair cannot bypass the daily budget", async ({ page }) => {
+  await forYou(page); await page.locator("#edit-profile").click();
+  await page.locator("#daily-batch-limit").fill("1"); await page.locator("#daily-batch-limit").dispatchEvent("change");
+  await page.locator("#close-settings").click(); await page.evaluate(() => localStorage.setItem("mock-mode", "unknown"));
+  await page.locator("#review-day").click(); await expect(page.locator("#for-you-controls")).toContainText("Daily batch limit reached");
+  expect(await calls(page)).toHaveLength(1);
+});
+test("live batch duration and completed timing survive reload", async ({ page }) => {
+  await forYou(page); await page.evaluate(() => localStorage.setItem("mock-mode", "hold"));
+  await page.locator("#review-day").click(); await expect.poll(() => calls(page).then((rows) => rows.length)).toBe(1);
+  await page.clock.runFor(65000); await expect(page.locator("#review-timing")).toContainText("1m 5s elapsed");
+  await page.evaluate(() => (window as any).releaseReview());
+  await expect(page.locator("#for-you-controls")).toContainText("2/2 abstracts reviewed");
+  await expect(page.locator("#review-timing")).toContainText("Last batch: 1m 5s");
+  await page.reload(); await forYou(page);
+  await expect(page.locator("#review-timing")).toContainText("1 completed batches: 1m 5s total");
+  expect(await calls(page)).toHaveLength(1);
 });

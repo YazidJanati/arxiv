@@ -16,6 +16,18 @@ A minimal macOS reader for daily arXiv papers, styled after [text](https://githu
 - Manual refresh, loading indicators, paper/result counts, cache timestamps, and retry controls for failed requests.
 - Clear empty states for weekends, future dates, unavailable announcements, no search matches, and an empty bookmark collection.
 
+### Personalized recommendations
+
+- Every day expands to its subscribed sections plus **For you**, including in the previous week. Recommendations use that exact announcement date across all followed sections and deduplicate cross-lists.
+- **Settings → Research profile** is an editable instruction profile. It starts with Yazid’s methodological interests in Monte Carlo, continuous/discrete diffusion, flow matching, autoregressive models, efficient sampling and speculative decoding, with explicit encouragement to discover novel nearby ideas such as UniformRace.
+- Recommendations use **titles, authors and complete abstracts only**. They do not fetch or read PDFs or full text.
+- No keyword prefilter or fixed recommendation count: every complete abstract is reviewed in bounded, sequential batches. Results distinguish direct connections from nearby ideas and explain the connection using the abstract. An empty result is valid.
+- Reviews run automatically while the app is open after all of a day’s subscribed listings are available. Missed retained days catch up on launch, newest first. Refresh retries a failed review. Automatic recommendations can be paused in Settings.
+- Uses the official **Codex CLI** signed in with your **ChatGPT account**, sharing its plan limits. The app detects Homebrew Codex or the bundled CLI in `/Applications/Codex.app`. **Connect ChatGPT** starts the official browser login when needed; the reader does not read or copy login tokens and does not use API-key billing.
+- Your profile, titles, authors and complete abstracts are sent to OpenAI for the review. This does not import ChatGPT conversations or memory. Codex runs ephemerally with user configuration, plugins, shell, browsing, computer-use and subagent tools disabled, in a read-only sandbox. The reader’s own network bridge remains restricted to arXiv.
+- Successful complete reviews are saved locally and reused offline, including when signed out. Profile, subscription or paper-content changes invalidate old results. Failed refreshes preserve matching saved results; partial model results and unknown paper IDs are never published.
+- Recommendation snapshots expire with the same two-calendar-week window as daily papers. Profile/preferences and bookmarks remain separate and are preserved.
+
 ### Search
 
 - Search by title and author across **every followed section**, from the beginning of the previous calendar week through today, independently of the selected day or displayed week. Search also works before opening a day.
@@ -53,7 +65,7 @@ A minimal macOS reader for daily arXiv papers, styled after [text](https://githu
 - Native macOS menus, a resizable window with remembered size/position, and standard copy/paste and text-selection controls.
 - Keyboard shortcuts: **⌘F** search, **⌘B** sidebar, **⌘R** refresh, **⌘,** settings, **F1** help, and **Esc** clear search or close a dialog. Tab, Shift+Tab, Enter, and Space navigation are supported.
 - Categories, appearance, bookmarks, and cached papers stay on your Mac. Atomic saves, a save-failure notice with retry, and a quit-time check protect pending bookmark/preference changes.
-- No accounts, telemetry, or cloud synchronization.
+- No telemetry or cloud synchronization. Optional recommendations use your ChatGPT account through Codex.
 
 ## Cache behavior and retention
 
@@ -101,9 +113,10 @@ The installed app stores data under:
   state.json                 # categories, theme, and bookmarks
   day-v2-cs.LG-YYYY-MM-DD.json    # titles, authors, and full abstracts
   day-v2-stat.ML-YYYY-MM-DD.json
+  recommendations-v1-YYYY-MM-DD.json  # exact review inputs and selected IDs/reasons
 ```
 
-Writes are atomic. Failed preference/bookmark saves show a retry notice. Quit waits for the save queue and offers to keep the app open if saving failed. Daily cache writes must succeed before their snapshots count as cached. The two default sections need at most 20 weekday snapshot files across the rolling window. The legacy `feed-*` and `abstract-*` files are removed during migration. There are no accounts, telemetry, or cloud synchronization.
+Writes are atomic. Failed preference/bookmark saves show a retry notice. Quit waits for the save queue and offers to keep the app open if saving failed. Daily cache writes must succeed before their snapshots count as cached. The two default sections need at most 20 weekday snapshot files across the rolling window. The legacy `feed-*` and `abstract-*` files are removed during migration. There is no telemetry or cloud synchronization. Recommendations optionally use your ChatGPT account through Codex.
 
 ## Development and checks
 
@@ -131,6 +144,8 @@ Keyboard shortcuts: `⌘F` search, `⌘B` sidebar, `⌘R` refresh, `⌘,` settin
 ## Source layout
 
 - `src/main.ts` — reader interface and state
+- `src/recommendations.ts` — editable default profile, complete-abstract review queue, validation and caching
+- `native/Recommender.swift` — local Codex worker and ChatGPT connection
 - `src/search.ts` — deduplicated search across the retained calendar window
 - `src/source.ts` — complete daily snapshots, two-week retention, pagination, and bookmark fallback
 - `src/platform.ts` — native messaging and browser fallback

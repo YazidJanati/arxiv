@@ -18,3 +18,10 @@
 .result-date+.paper{padding-top:10px}
 
 .paper.date-group-end{border-bottom:0}
+
+#for-you-controls{max-width:920px;margin:0 auto 23px;display:flex;align-items:baseline;gap:16px;font-size:10px;line-height:1.8;color:var(--muted)}
+#for-you-controls>span{flex:1;overflow-wrap:anywhere}#for-you-controls button{padding:0;flex-shrink:0;text-decoration:underline;text-underline-offset:3px}
+.recommendation-reason{font-size:11px;line-height:1.85;color:var(--muted);margin:10px 0 0;overflow-wrap:anywhere}.recommendation-reason>span{color:var(--strong);font-size:9px;margin-right:7px}
+#settings-dialog{width:620px}.recommendation-toggle{display:flex;align-items:center;gap:8px;font-size:11px;line-height:1.8}.recommendation-toggle input{accent-color:var(--muted)}
+#profile-form{margin-top:18px}textarea{font:inherit;color:inherit;background:var(--sidebar);border:1px solid var(--border);border-radius:2px;padding:10px;width:100%;resize:vertical;line-height:1.8;font-size:11px;min-height:160px}textarea:focus-visible{outline:1px solid var(--muted)}
+.plain-button{border:1px solid var(--border);border-radius:2px;padding:6px 10px;font-size:10px}.profile-actions{display:flex;align-items:center;gap:12px}#profile-status{flex:1}

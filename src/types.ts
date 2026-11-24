@@ -11,6 +11,7 @@ export interface State {
   categories: string[];
   theme: Theme;
   bookmarks: Paper[];
+  recommendations?: { enabled: boolean; profile: string };
 }
 export interface DayFeed {
   schema: 2;

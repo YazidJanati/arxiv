@@ -36,7 +36,7 @@ export async function write(key: string, value: unknown): Promise<void> {
     tx.onabort = () => reject(new Error("Local save was interrupted."));
   });
 }
-const isCacheKey = (key: string) => /^(day-v2-|feed-|abstract-)[A-Za-z0-9._-]+$/.test(key);
+const isCacheKey = (key: string) => /^(day-v2-|feed-|abstract-|recommendations-v1-)[A-Za-z0-9._-]+$/.test(key);
 export async function cacheKeys(): Promise<string[]> {
   if (desktop) return native<string[]>("cacheKeys");
   const database = await db();

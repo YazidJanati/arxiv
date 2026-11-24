@@ -93,6 +93,8 @@ final class ArxivNetwork {
 
 final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
     private let network = ArxivNetwork()
+    private let recommender = RecommendationWorker()
+    func stopRecommendations() { recommender.stop() }
     private let directory: URL
     init(directory: URL) { self.directory = directory }
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage, replyHandler reply: @escaping Reply) {
@@ -102,6 +104,8 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
         }
         do {
             switch operation {
+            case "recommendationStatus", "recommendationLogin", "recommend":
+                recommender.handle(operation: operation, body: body, reply: reply)
             case "fetch":
                 guard let path = body["path"] as? String else { reply(nil, "Missing path."); return }
                 network.fetch(path: path, reply: reply)
@@ -110,11 +114,11 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
                 let keys = try FileManager.default.contentsOfDirectory(atPath: directory.path)
                     .filter { $0.hasSuffix(".json") }
                     .map { String($0.dropLast(5)) }
-                    .filter { $0.hasPrefix("day-v2-") || $0.hasPrefix("feed-") || $0.hasPrefix("abstract-") }
+                    .filter { $0.hasPrefix("day-v2-") || $0.hasPrefix("feed-") || $0.hasPrefix("abstract-") || $0.hasPrefix("recommendations-v1-") }
                 reply(keys, nil)
             case "removeCache":
                 guard let key = body["key"] as? String,
-                      key.range(of: #"^(day-v2-|feed-|abstract-)[A-Za-z0-9._-]+$"#, options: .regularExpression) != nil else {
+                      key.range(of: #"^(day-v2-|feed-|abstract-|recommendations-v1-)[A-Za-z0-9._-]+$"#, options: .regularExpression) != nil else {
                     reply(nil, "Only disposable paper caches can be removed."); return
                 }
                 let file = directory.appendingPathComponent(key + ".json")
@@ -192,6 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         NSApp.activate(ignoringOtherApps: true)
         if ProcessInfo.processInfo.arguments.contains("--smoke-test") { runSmokeTest() }
     }
+    func applicationWillTerminate(_ notification: Notification) { bridge.stopRecommendations() }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag { window.makeKeyAndOrderFront(nil) }; return true
     }
@@ -294,7 +299,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         }
     }
 }
-let application = NSApplication.shared
-let delegate = AppDelegate()
-application.delegate = delegate
-application.run()
+@main
+struct ArxivApplication {
+    static func main() {
+        let application = NSApplication.shared
+        let delegate = AppDelegate()
+        application.delegate = delegate
+        withExtendedLifetime(delegate) { application.run() }
+    }
+}

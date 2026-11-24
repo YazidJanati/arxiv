@@ -84,9 +84,19 @@ export async function pruneCache(categories: string[]): Promise<void> {
   allowedCategories = new Set(categories);
   await mutate(async () => {
     for (const key of await cacheKeys()) {
+      const recommendation = key.match(/^recommendations-v1-(\d{4}-\d{2}-\d{2})$/);
+      if (recommendation) {
+        if (!inWindow(recommendation[1]) || recommendation[1] > today()) await removeCache(key);
+        continue;
+      }
       const match = key.match(/^day-v2-(.+)-(\d{4}-\d{2}-\d{2})$/);
       if (!match || !allowedCategories!.has(match[1]) || !inWindow(match[2]) || match[2] > today()) await removeCache(key);
     }
+  });
+}
+export async function saveRecommendations(date: string, value: unknown, valid: () => boolean): Promise<void> {
+  await mutate(async () => {
+    if (inWindow(date) && date <= today() && valid()) await write(`recommendations-v1-${date}`, value);
   });
 }
 export async function cachedDay(category: string, date: string): Promise<DayFeed | null> {
